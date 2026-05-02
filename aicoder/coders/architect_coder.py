@@ -52,6 +52,9 @@ class ArchitectCoder(AskCoder):
         editor_coder = Coder.create(**new_kwargs)
         editor_coder.cur_messages = []
         editor_coder.done_messages = []
+        # Propagate root and repo so the editor operates on the same workspace
+        editor_coder.root = self.root
+        editor_coder.repo = self.repo
 
         if self.verbose:
             editor_coder.show_announcements()

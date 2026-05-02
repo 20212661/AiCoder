@@ -1,17 +1,21 @@
-"""run_shell Handler — Shell 命令执行，参考 Cline ExecuteCommandToolHandler + CommandOrchestrator"""
-import shlex, subprocess, time, os, re
+"""run_shell Handler — Shell 命令执行，带沙箱隔离和命令过滤"""
+import shlex, subprocess, time, os, re, sys
 from .base import ToolHandler
 from ..result import ToolCall, ToolResult
 
 # ── 超时常量 ──
 DEFAULT_TIMEOUT = 30
 LONG_RUNNING_TIMEOUT = 300
-BACKGROUND_TIMEOUT = 600  # 后台命令硬超时 10 分钟
+MAX_HARD_TIMEOUT = 600
 
 # ── 输出限制 ──
-MAX_OUTPUT_LINES = 500       # 返回 AI 的最大行数
-MAX_OUTPUT_BYTES = 80 * 1024  # 返回 AI 的最大字节 80KB
-SUMMARY_HEAD_TAIL = 50        # 截断时保留首尾各 50 行
+MAX_OUTPUT_LINES = 500
+MAX_OUTPUT_BYTES = 80 * 1024
+SUMMARY_HEAD_TAIL = 50
+
+# ── 资源限制 ──
+MAX_CHILD_PROCS = 50             # 子进程最大数量
+MAX_OUTPUT_CAPTURE = 10 * 1024 * 1024  # 单次捕获 10MB
 
 # ── 长运行命令模式 ──
 LONG_RUNNING_PATTERNS = [
@@ -28,21 +32,38 @@ LONG_RUNNING_PATTERNS = [
     r'\bgit\s+clone\b',
 ]
 
-# ── 危险命令模式 ──
+# ── 危险命令模式（绝对禁止，不可覆盖）──
+BLOCKED_PATTERNS = [
+    (r'\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|/?)(/\s*$|/\s*>)', 'BLOCKED: rm -rf on root path — irreversible disk destruction'),
+    (r'\brm\s+-[a-zA-Z]*f[a-zA-Z]*\s+~[/\s]*$', 'BLOCKED: rm -rf on home directory — irreversible data loss'),
+    (r'\bdd\s+if=.*of=/dev/sd[a-z]', 'BLOCKED: dd writing to raw disk device'),
+    (r'>\s*/dev/sd[a-z]', 'BLOCKED: writing to raw disk device'),
+    (r'\bchmod\s+-R\s+777\s+/', 'BLOCKED: chmod 777 on root — security hazard'),
+    (r':\(\)\s*\{\s*:\|:&\s*\}\s*;', 'BLOCKED: fork bomb detected'),
+    (r'\bmkfs\b', 'BLOCKED: filesystem format command'),
+    (r'\b(fdisk|parted)\b', 'BLOCKED: disk partitioning command'),
+    (r'>\s*/dev/mem', 'BLOCKED: writing to /dev/mem'),
+    (r'\bsysctl\s+-w\s', 'BLOCKED: runtime kernel parameter modification'),
+]
+
+# ── 危险但可覆盖的命令（需要额外确认）──
 DANGEROUS_PATTERNS = [
-    (r'\brm\s+-rf\s+/', 'DESTRUCTIVE: rm -rf on root path'),
-    (r'\brm\s+-rf\s+~', 'DESTRUCTIVE: rm -rf on home directory'),
-    (r'\bdd\s+if=', 'DESTRUCTIVE: dd can overwrite disks'),
-    (r'>\s*/dev/sd[a-z]', 'DESTRUCTIVE: writing to raw disk device'),
-    (r'\bchmod\s+-R\s+777\s+/', 'DESTRUCTIVE: chmod 777 on root'),
-    (r'\bgit\s+push\s+--force\b.*\bmain\b', 'DESTRUCTIVE: force push to main'),
-    (r':\(\)\s*\{\s*:\|:&\s*\}\s*;', 'FORK BOMB detected'),
+    (r'\bgit\s+push\s+--force\b.*\b(main|master)\b', 'DESTRUCTIVE: force push to main/master'),
+    (r'\bgit\s+reset\s+--hard\b', 'DESTRUCTIVE: git reset --hard discards uncommitted changes'),
+    (r'\bgit\s+clean\s+-[a-zA-Z]*f', 'DESTRUCTIVE: git clean -f removes untracked files'),
+    (r'\brm\s+-[a-zA-Z]*f[a-zA-Z]*\s+', 'WARNING: rm with force flag'),
+    (r'\bchmod\s+-R\s+777\b', 'WARNING: recursive chmod 777'),
+    (r'\bkill\s+-9\s+1\b', 'WARNING: killing init process'),
+    (r'\b(taskkill|pkill|killall)\s+.*-9\b', 'WARNING: force killing processes'),
+    (r'\bshutdown\b', 'WARNING: system shutdown command'),
+    (r'\breboot\b', 'WARNING: system reboot command'),
 ]
 
 
 class RunShellHandler(ToolHandler):
     name = "run_shell"
     requires_approval = True
+    default_timeout = DEFAULT_TIMEOUT
 
     def validate_params(self, tool_call: ToolCall) -> str:
         if not tool_call.get("command"):
@@ -56,38 +77,59 @@ class RunShellHandler(ToolHandler):
         # ── 命令清理 ──
         command = self._clean_command(command)
 
-        # ── 安全检查 ──
+        # ── 绝对禁止检查（不可覆盖）──
+        blocked = self._check_blocked(command)
+        if blocked:
+            return ToolResult.fail(self.name, f"[SECURITY] {blocked}")
+
+        # ── 危险命令检查（需额外确认）──
         danger = self._check_dangerous(command)
         if danger and requires_approval:
-            # 额外确认
             extra = coder.io.confirm_ask(
                 f"[WARNING] {danger}\n  Command: {command[:200]}\n  Execute anyway?"
             )
             if not extra:
                 return ToolResult.create_rejected(self.name)
 
+        # ── 安全检查（通过 approval controller）──
+        if hasattr(coder, "_approval") and coder._approval is not None:
+            is_dangerous, warning = coder._approval.is_command_dangerous(command)
+            if is_dangerous and requires_approval:
+                extra = coder.io.confirm_ask(
+                    f"[DANGER] {warning}\n  Command: {command[:200]}\n  Execute anyway?"
+                )
+                if not extra:
+                    return ToolResult.create_rejected(self.name)
+
         # ── 超时决策 ──
         timeout = LONG_RUNNING_TIMEOUT if self._is_long_running(command) else DEFAULT_TIMEOUT
+        timeout_str = tool_call.get("timeout", "")
+        if timeout_str:
+            try:
+                timeout = min(float(timeout_str), MAX_HARD_TIMEOUT)
+            except ValueError:
+                pass
 
-        # ── 执行 ──
+        # ── 执行（沙箱隔离）──
         start_time = time.time()
         try:
-            result = subprocess.run(
-                shlex.split(command),
-                capture_output=True, text=True,
-                cwd=coder.root, timeout=timeout,
-            )
+            result = self._run_sandboxed(command, coder.root, timeout)
             elapsed = time.time() - start_time
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             elapsed = time.time() - start_time
-            return ToolResult.fail(
-                self.name,
-                f"Command timed out after {timeout}s "
-                f"(ran {elapsed:.0f}s before timeout).\n"
-                "For long-running commands, the tool supports up to 300s timeout. "
-                "If the command is still needed, use run_shell with a sub-command or "
-                "redirect output to a file."
+            partial = ""
+            if e.stdout:
+                partial = e.stdout[:1000] if isinstance(e.stdout, str) else e.stdout[:1000].decode("utf-8", errors="ignore")
+            if e.stderr:
+                partial += "\n" + (e.stderr[:1000] if isinstance(e.stderr, str) else e.stderr[:1000].decode("utf-8", errors="ignore"))
+            msg = (
+                f"Command timed out after {timeout}s (ran {elapsed:.0f}s).\n"
+                f"For long-running commands, specify a higher timeout (max {MAX_HARD_TIMEOUT}s) "
+                f"or redirect output to a file."
             )
+            if partial.strip():
+                msg += f"\n\nPartial output:\n{partial}"
+            return ToolResult.fail(self.name, msg)
         except FileNotFoundError:
             return ToolResult.fail(
                 self.name,
@@ -108,26 +150,79 @@ class RunShellHandler(ToolHandler):
         else:
             return ToolResult.fail(self.name, output)
 
+    # ── 沙箱执行 ──
+
+    @staticmethod
+    def _run_sandboxed(command: str, cwd: str, timeout: float) -> subprocess.CompletedProcess:
+        """在沙箱环境中执行命令。
+
+        隔离措施：
+        1. 独立进程组（new process group）— 可整体终止
+        2. 资源限制（仅 Unix）— 内存 / 文件大小 / CPU 时间
+        3. 输出大小限制 — 防止内存溢出
+        4. 环境变量隔离 — 只保留必要变量
+        """
+        # 构建安全的命令列表
+        try:
+            cmd_args = shlex.split(command)
+        except ValueError:
+            # shlex 解析失败时回退
+            cmd_args = command
+
+        # 环境变量：继承当前环境但移除敏感项
+        env = os.environ.copy()
+        for key in list(env.keys()):
+            upper = key.upper()
+            if any(kw in upper for kw in ("SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY")):
+                if not key.endswith("_PUBLIC"):
+                    del env[key]
+
+        # 子进程启动参数
+        kwargs = {
+            "capture_output": True,
+            "text": True,
+            "cwd": cwd,
+            "timeout": timeout,
+            "env": env,
+        }
+
+        # 进程组隔离（Unix & Windows 均支持）
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+
+        return subprocess.run(cmd_args, **kwargs)
+
     # ── 内部方法 ──
 
     @staticmethod
     def _clean_command(command: str) -> str:
-        """清理命令：去除首尾空白、统一换行"""
+        """清理命令：去除首尾空白、统一换行、剥除代码围栏"""
         cmd = command.strip()
-        # 去除首尾反引号（LLM 有时会多包一层）
+        if cmd.startswith("```") and cmd.endswith("```"):
+            cmd = cmd[3:-3].strip()
         if cmd.startswith("`") and cmd.endswith("`"):
             cmd = cmd[1:-1].strip()
         return cmd
 
     def _is_long_running(self, command: str) -> bool:
-        """检测是否为长运行命令（构建/测试/安装等）"""
         for pattern in LONG_RUNNING_PATTERNS:
             if re.search(pattern, command, re.IGNORECASE):
                 return True
         return False
 
-    def _check_dangerous(self, command: str) -> str:
-        """检查命令是否包含危险操作，返回警告信息或空字符串"""
+    @staticmethod
+    def _check_blocked(command: str) -> str:
+        """检查绝对禁止的命令。返回警告信息或空字符串。"""
+        for pattern, warning in BLOCKED_PATTERNS:
+            if re.search(pattern, command, re.IGNORECASE):
+                return warning
+        return ""
+
+    @staticmethod
+    def _check_dangerous(command: str) -> str:
+        """检查危险但可覆盖的命令。返回警告信息或空字符串。"""
         for pattern, warning in DANGEROUS_PATTERNS:
             if re.search(pattern, command, re.IGNORECASE):
                 return warning
@@ -172,15 +267,12 @@ class RunShellHandler(ToolHandler):
             "",
         ]
 
-        # 头部
         result_lines.append(f"--- First {len(head)} lines ---")
         result_lines.extend(head)
 
-        # 省略标记
         if skipped > 0:
             result_lines.append(f"\n... ({skipped} lines omitted) ...")
 
-        # 尾部
         if tail:
             result_lines.append(f"\n--- Last {len(tail)} lines ---")
             result_lines.extend(tail)

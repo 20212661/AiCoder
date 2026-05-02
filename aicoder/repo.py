@@ -68,7 +68,8 @@ class GitRepo:
                 fname = fname.parent
 
             try:
-                repo_path = git.Repo(fname, search_parent_directories=True).working_dir
+                search_parent_directories = bool(git_dname or not fnames or not fname.is_dir())
+                repo_path = git.Repo(fname, search_parent_directories=search_parent_directories).working_dir
                 repo_path = safe_abs_path(repo_path)
                 repo_paths.append(repo_path)
             except ANY_GIT_ERROR:
@@ -135,7 +136,7 @@ class GitRepo:
             self.repo.git.commit(cmd)
             commit_hash = self.get_head_commit_sha(short=True)
             self.io.tool_output(f"Commit {commit_hash} {commit_message}")
-            return commit_hash, commit_message
+            return commit_hash, full_commit_message
         except ANY_GIT_ERROR as err:
             self.io.tool_error(f"Unable to commit: {err}")
             return None

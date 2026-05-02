@@ -123,6 +123,12 @@ class WholeFileCoder(Coder):
             full_path = self.abs_root_path(path)
             new_content = "".join(new_lines)
 
+            # 跳过无效路径：目录、空路径、无扩展名且不在聊天文件中的路径
+            if not path or os.path.isdir(full_path):
+                if self.verbose:
+                    self.io.tool_output(f"Skipping invalid path: {path}")
+                continue
+
             # 确保目录存在
             Path(full_path).parent.mkdir(parents=True, exist_ok=True)
 

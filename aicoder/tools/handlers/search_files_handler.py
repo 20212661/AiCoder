@@ -1,5 +1,6 @@
 """search_files Handler — ripgrep 搜索，参考 Cline 的 --json + context + 按文件分组"""
-import subprocess, os, json
+import os, re, subprocess, json
+from pathlib import Path
 from .base import ToolHandler
 from ..result import ToolCall, ToolResult
 
@@ -28,7 +29,7 @@ class SearchFilesHandler(ToolHandler):
             if not os.path.isdir(full_path):
                 return ToolResult.fail(self.name, f"Directory not found: {rel_path}")
 
-        # 优先 ripgrep --json，回退 grep
+        # 优先 ripgrep --json
         try:
             output = self._search_rg(full_path, regex, file_pattern, coder.root)
             if output is not None:
@@ -36,6 +37,7 @@ class SearchFilesHandler(ToolHandler):
         except Exception:
             pass
 
+        # 回退 grep
         try:
             output = self._search_grep(full_path, regex, file_pattern)
             if output is not None:
@@ -43,7 +45,103 @@ class SearchFilesHandler(ToolHandler):
         except Exception:
             pass
 
-        return ToolResult.fail(self.name, "Neither ripgrep nor grep is available")
+        # 最终回退：Python 纯正则搜索
+        try:
+            output = self._search_python(full_path, regex, file_pattern, coder.root)
+            if output is not None:
+                return ToolResult.ok(self.name, output)
+        except Exception as e:
+            return ToolResult.fail(self.name, f"Search failed: {e}")
+
+        return ToolResult.fail(self.name, "Search failed unexpectedly")
+
+    def _search_python(self, full_path: str, regex: str, file_pattern: str, cwd: str) -> str:
+        """纯 Python 回退：用 re 模块递归搜索文件"""
+        try:
+            pattern = re.compile(regex, re.IGNORECASE)
+        except re.error as e:
+            return f"Invalid regex: {e}"
+
+        # 将 glob 模式转为简单后缀匹配
+        ext_filter = None
+        if file_pattern:
+            fp = file_pattern.lstrip("*")
+            if fp.startswith("."):
+                ext_filter = fp
+
+        results_by_file = {}
+        match_count = 0
+        root = Path(full_path)
+
+        for filepath in root.rglob("*"):
+            if not filepath.is_file():
+                continue
+            if filepath.stat().st_size > 1024 * 1024:  # skip files > 1MB
+                continue
+            if ext_filter and filepath.suffix != ext_filter:
+                continue
+            # 跳过常见二进制/无关目录
+            skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", ".mypy_cache"}
+            if any(p in skip_dirs for p in filepath.parts):
+                continue
+
+            try:
+                text = filepath.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+
+            matches_for_file = []
+            for i, line in enumerate(text.splitlines(), 1):
+                if pattern.search(line):
+                    matches_for_file.append({"line": i, "text": line.rstrip()})
+                    match_count += 1
+                    if match_count >= MAX_RESULTS:
+                        break
+
+            if matches_for_file:
+                rel = os.path.relpath(filepath, cwd)
+                results_by_file[rel] = matches_for_file
+
+            if match_count >= MAX_RESULTS:
+                break
+
+        if not results_by_file:
+            return f"No matches found for '{regex}'"
+
+        output_parts = []
+        total_bytes = 0
+        shown = 0
+        truncated = False
+
+        for file_path, matches in results_by_file.items():
+            file_header = file_path + "\n|----\n"
+            if total_bytes + len(file_header) >= MAX_OUTPUT_BYTES:
+                truncated = True
+                break
+            output_parts.append(file_header)
+            total_bytes += len(file_header)
+
+            for m in matches:
+                shown += 1
+                line_text = f"|{m['line']:>5}: {m['text']}\n"
+                if total_bytes + len(line_text) >= MAX_OUTPUT_BYTES:
+                    truncated = True
+                    break
+                output_parts.append(line_text)
+                total_bytes += len(line_text)
+
+            output_parts.append("|----\n\n")
+            total_bytes += 8
+            if truncated or shown >= MAX_RESULTS:
+                break
+
+        result = "".join(output_parts)
+        result += f"\nFound {match_count} matches for '{regex}'"
+        if truncated:
+            result += f"\n[Results truncated at {MAX_OUTPUT_BYTES // 1024}KB limit]"
+        if shown >= MAX_RESULTS:
+            result += f"\n[Showing first {MAX_RESULTS} results]"
+        return result
 
     def _search_rg(self, full_path: str, regex: str, file_pattern: str, cwd: str) -> str | None:
         """使用 ripgrep --json 搜索，按文件分组输出"""

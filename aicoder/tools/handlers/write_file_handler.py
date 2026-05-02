@@ -1,7 +1,18 @@
-"""write_file Handler — 整文件写入，带内容清理"""
+"""write_file Handler — 整文件写入，带内容清理和路径安全"""
+import os
 from pathlib import Path
 from .base import ToolHandler
 from ..result import ToolCall, ToolResult, build_unified_diff
+
+MAX_WRITE_BYTES = 2 * 1024 * 1024  # 2MB per file write
+BINARY_EXTENSIONS = frozenset({
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".obj", ".o", ".a",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff",
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+    ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac",
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+    ".sqlite", ".db", ".woff", ".woff2", ".ttf", ".eot",
+})
 
 
 class WriteFileHandler(ToolHandler):
@@ -22,7 +33,34 @@ class WriteFileHandler(ToolHandler):
         # 内容清理：去除 LLM 可能多加的 markdown 围栏
         content = self._clean_content(content)
 
+        # 文件大小检查
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > MAX_WRITE_BYTES:
+            return ToolResult.fail(
+                self.name,
+                f"Content too large: {content_bytes} bytes exceeds {MAX_WRITE_BYTES} byte limit. "
+                "Use edit_file for targeted changes."
+            )
+
         full_path = coder.abs_root_path(path)
+
+        # 二次校验：确保解析后的绝对路径仍在工作区内
+        resolved = str(Path(full_path).resolve())
+        root_resolved = str(Path(coder.root).resolve())
+        if not resolved.startswith(root_resolved + os.sep) and resolved != root_resolved:
+            return ToolResult.fail(
+                self.name,
+                f"Path traversal blocked: {path} resolves outside workspace {coder.root}"
+            )
+
+        # 二进制文件保护
+        ext = Path(resolved).suffix.lower()
+        if ext in BINARY_EXTENSIONS:
+            return ToolResult.fail(
+                self.name,
+                f"Cannot write binary file type: {ext}. "
+                "Binary files should not be written via text tools."
+            )
 
         # 确保目录存在
         Path(full_path).parent.mkdir(parents=True, exist_ok=True)

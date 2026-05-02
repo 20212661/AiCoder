@@ -1,11 +1,19 @@
 import os, sys, time, shutil
 from pathlib import Path
+from typing import Any
 from ..io import InputOutput
 from ..models import Model, DEFAULT_MODEL_NAME
+from ..exceptions import LLMError
 from .base_prompts import CoderPrompts
 from ..commands import Commands, SwitchCoder
 
 all_fences = [("```", "```"), ("````", "````"), ("<source>", "</source>"), ("<code>", "</code>")]
+
+# Named constants — avoid magic numbers
+MAX_TOOL_CALL_ROUNDS = 5
+LLM_MAX_RETRIES = 3
+CONTEXT_RESERVE_TOKENS = 512
+EMERGENCY_KEEP_MESSAGES = 16
 
 class Coder:
     edit_format = None
@@ -13,7 +21,9 @@ class Coder:
     fences = all_fences
     fence = fences[0]
 
-    def __init__(self, main_model, io, fnames=None, verbose=False, stream=True, auto_commits=True, map_tokens=1024):
+    def __init__(self, main_model: Model, io: InputOutput | None = None, fnames: list[str] | None = None,
+                 verbose: bool = False, stream: bool = True, auto_commits: bool = True,
+                 map_tokens: int = 1024, session_id: str | None = None) -> None:
         if not fnames: fnames = []
         if io is None: io = InputOutput()
         self.io = io; self.main_model = main_model
@@ -26,8 +36,16 @@ class Coder:
         self.shell_commands = []; self.abs_root_path_cache = {}
         self.repo = None; self.aider_commit_hashes = set(); self.total_cost = 0.0
         self.summarizer = None; self.commit_before_message = []
+        self._context_mgr = None  # initialised lazily in _trim_context_for_model
         self.commands = Commands(io, self); self.root = os.getcwd()
         self._first_message = True; self._file_tree = None
+        self.session_id = session_id
+        self._first_user_message = None
+        self._session_token_in = 0
+        self._session_token_out = 0
+        self._approval = None  # Set by main.py after loading settings
+        self._cached_system_messages = None
+        self._cached_system_key = None  # (model_name, mode) tuple
         self._init_tool_system()
         for fname in fnames:
             fname = Path(fname)
@@ -41,8 +59,9 @@ class Coder:
     def _init_tool_system(self):
         from ..tools.registry import ToolRegistry
         from ..tools.executor import ToolExecutor, ToolCoordinator
-        from ..tools.prompt_builder import PromptBuilder
+        from ..tools.system_prompt import SystemPrompt
         from ..tools.result import ExecutionState
+        # 内置工具 spec
         from ..tools.tools.edit_file import EDIT_FILE_SPEC
         from ..tools.tools.write_file import WRITE_FILE_SPEC
         from ..tools.tools.run_shell import RUN_SHELL_SPEC
@@ -50,6 +69,7 @@ class Coder:
         from ..tools.tools.search_files import SEARCH_FILES_SPEC
         from ..tools.tools.list_files import LIST_FILES_SPEC
         from ..tools.tools.list_code_defs import LIST_CODE_DEFS_SPEC
+        # 内置工具 handler
         from ..tools.handlers.edit_file_handler import EditFileHandler
         from ..tools.handlers.write_file_handler import WriteFileHandler
         from ..tools.handlers.run_shell_handler import RunShellHandler
@@ -57,54 +77,90 @@ class Coder:
         from ..tools.handlers.search_files_handler import SearchFilesHandler
         from ..tools.handlers.list_files_handler import ListFilesHandler
         from ..tools.handlers.list_code_defs_handler import ListCodeDefsHandler
+
+        # 1. 加载用户插件（自动发现 ~/.aicoder/plugins/）
+        from ..plugins import plugin_registry
+        from ..plugins.loader import PluginLoader
+        loader = PluginLoader(plugin_registry)
+        num_loaded = loader.load_all()
+        if num_loaded > 0:
+            self.io.tool_output(f"Loaded {num_loaded} user plugin(s)")
+
+        # 2. 注册内置工具 spec
         self.tool_registry = ToolRegistry()
-        for spec in [EDIT_FILE_SPEC, WRITE_FILE_SPEC, RUN_SHELL_SPEC, READ_FILE_SPEC,
-                     SEARCH_FILES_SPEC, LIST_FILES_SPEC, LIST_CODE_DEFS_SPEC]:
+        builtin_specs = [EDIT_FILE_SPEC, WRITE_FILE_SPEC, RUN_SHELL_SPEC, READ_FILE_SPEC,
+                         SEARCH_FILES_SPEC, LIST_FILES_SPEC, LIST_CODE_DEFS_SPEC]
+        for spec in builtin_specs:
             self.tool_registry.register(spec)
-        self.tool_prompt_builder = PromptBuilder(self.tool_registry.get_all())
-        self._update_tool_model_info()
+
+        # 3. 注册插件工具 spec（追加到内置工具之后）
+        for plugin_spec in plugin_registry.get_tool_specs():
+            self.tool_registry.register(plugin_spec)
+
+        # 4. 注册内置工具 handler
+        self._system_prompt = SystemPrompt()
         self.tool_coordinator = ToolCoordinator()
-        for h in [EditFileHandler(), WriteFileHandler(), RunShellHandler(),
-                  ReadFileHandler(), SearchFilesHandler(), ListFilesHandler(), ListCodeDefsHandler()]:
+        builtin_handlers = [EditFileHandler(), WriteFileHandler(), RunShellHandler(),
+                            ReadFileHandler(), SearchFilesHandler(), ListFilesHandler(), ListCodeDefsHandler()]
+        for h in builtin_handlers:
             self.tool_coordinator.register(h)
+
+        # 5. 注册插件工具 handler
+        for handler_cls in plugin_registry.get_tool_handlers():
+            handler = handler_cls()
+            self.tool_coordinator.register(handler)
+
         self.tool_exec_state = ExecutionState()
         self.tool_executor = ToolExecutor(self.tool_coordinator, self, self.tool_exec_state)
+        self._update_tool_model_info()
 
     def _update_tool_model_info(self):
         import platform
         from ..models import MODEL_TOKEN_LIMITS
         model_names = [k for k in MODEL_TOKEN_LIMITS if not k.startswith("machao-")]
         model_names += ["machao-flash", "machao-pro"]
-        self.tool_prompt_builder.set_models(model_names, self.main_model.name)
-        self.tool_prompt_builder.set_cwd(self.root.replace("\\", "/"))
-        cwd = self.root.replace("\\", "/")
-        os_name = platform.system()
-        if os_name == "Windows":
-            hint = "# SYSTEM INFO\n\nWorking directory: " + cwd + "\nYou are on Windows. Use: dir (not ls). Prefer list_files tool.\n"
+        model_name = self.main_model.name.lower() if self.main_model else ""
+        if "machao-pro" in model_name:
+            from .base_prompts import MACHO_IDENTITY_PRO
+            ai_identity = MACHO_IDENTITY_PRO
+        elif "machao" in model_name:
+            from .base_prompts import MACHO_IDENTITY_FLASH
+            ai_identity = MACHO_IDENTITY_FLASH
         else:
-            hint = "# SYSTEM INFO\n\nWorking directory: " + cwd + "\nYou are on " + os_name + ". Prefer list_files tool.\n"
-        self.tool_prompt_builder.set_os_info(hint)
+            ai_identity = getattr(self.gpt_prompts, "ai_identity", "")
+        self._system_prompt.configure(
+            tools=self.tool_registry.get_all(),
+            cwd=self.root.replace("\\", "/"),
+            os_name=platform.system(),
+            model_list=model_names,
+            current_model=self.main_model.name,
+            mode="plan" if self.tool_exec_state.is_plan_mode else "act",
+            ai_identity=ai_identity,
+        )
 
-    def _find_common_root(self, paths):
+    def _find_common_root(self, paths: set[str]) -> str:
         if not paths: return os.getcwd()
         return str(Path(os.path.commonpath([Path(p).parent for p in paths])))
 
     @classmethod
-    def create(cls, main_model=None, edit_format=None, io=None, **kwargs):
+    def create(cls, main_model: Model | None = None, edit_format: str | None = None,
+               io: InputOutput | None = None, **kwargs: Any) -> "Coder":
         if not main_model: main_model = Model(DEFAULT_MODEL_NAME)
         if edit_format is None: edit_format = main_model.edit_format or "whole"
-        coder_classes = {"whole": "wholefile_coder.WholeFileCoder", "diff": "editblock_coder.EditBlockCoder",
-                         "ask": "ask_coder.AskCoder", "architect": "architect_coder.ArchitectCoder"}
-        class_path = coder_classes.get(edit_format)
-        if class_path:
-            mn, cn = class_path.rsplit(".", 1)
-            import importlib
-            m = importlib.import_module(f".{mn}", package="aicoder.coders")
-            return getattr(m, cn)(main_model, io, **kwargs)
         from .wholefile_coder import WholeFileCoder
-        return WholeFileCoder(main_model, io, **kwargs)
+        from .editblock_coder import EditBlockCoder
+        from .ask_coder import AskCoder
+        from .architect_coder import ArchitectCoder
+        coder_classes = {
+            "whole": WholeFileCoder,
+            "diff": EditBlockCoder,
+            "ask": AskCoder,
+            "architect": ArchitectCoder,
+        }
+        coder_cls = coder_classes.get(edit_format, WholeFileCoder)
+        return coder_cls(main_model, io, **kwargs)
 
-    def abs_root_path(self, path):
+    def abs_root_path(self, path: str) -> str:
         if path in self.abs_root_path_cache: return self.abs_root_path_cache[path]
         # 阻止绝对路径穿越工作区
         p = Path(path)
@@ -115,15 +171,15 @@ class Coder:
         res = str(Path(self.root) / path); res = str(Path(res).resolve())
         self.abs_root_path_cache[path] = res; return res
 
-    def get_rel_fname(self, fname):
+    def get_rel_fname(self, fname: str) -> str:
         try: return os.path.relpath(fname, self.root)
         except ValueError: return fname
 
-    def get_inchat_relative_files(self):
+    def get_inchat_relative_files(self) -> list[str]:
         return sorted(self.get_rel_fname(f) for f in self.abs_fnames)
 
-    def get_all_relative_files(self): return self.get_inchat_relative_files()
-    def get_addable_relative_files(self): return []
+    def get_all_relative_files(self) -> list[str]: return self.get_inchat_relative_files()
+    def get_addable_relative_files(self) -> list[str]: return []
 
     def get_abs_fnames_content(self):
         for fname in list(self.abs_fnames):
@@ -185,7 +241,7 @@ class Coder:
             except Exception: continue
             for entry in entries:
                 if len(result) >= limit: break
-                if entry.startswith("."): continue
+                if entry == ".git": continue
                 abs_path = os.path.join(abs_dir, entry)
                 rel_path = (rel_base + "/" + entry) if rel_base else entry
                 if rel_path in visited: continue
@@ -214,79 +270,15 @@ class Coder:
         lines.append("")
         return "\n".join(lines)
 
-    def format_messages(self):
-        messages = []
-        main_system = getattr(self.gpt_prompts, "main_system", "")
-        system_reminder = getattr(self.gpt_prompts, "system_reminder", "")
-        model_name = self.main_model.name.lower() if self.main_model else ""
-        if "machao-pro" in model_name:
-            from .base_prompts import MACHO_IDENTITY_PRO
-            ai_identity = MACHO_IDENTITY_PRO
-        elif "machao" in model_name:
-            from .base_prompts import MACHO_IDENTITY_FLASH
-            ai_identity = MACHO_IDENTITY_FLASH
-        else: ai_identity = getattr(self.gpt_prompts, "ai_identity", "")
-        system_content = main_system
-        if ai_identity: system_content = ai_identity + "\n\n" + system_content
-        if system_reminder: system_content += "\n\n" + system_reminder
-        tool_docs = self.tool_prompt_builder.generate()
-        system_content += "\n\n" + tool_docs
-        if system_content: messages.append(dict(role="system", content=system_content))
-        for msg in getattr(self.gpt_prompts, "example_messages", []): messages.append(msg)
-        messages.extend(self.done_messages)
-        repo_map = self.get_repo_map()
-        if repo_map:
-            messages += [dict(role="user", content=repo_map), dict(role="assistant", content="Ok.")]
-        messages.extend(self.get_chat_files_messages())
-        messages.extend(self.cur_messages)
-        return messages
+    def format_messages(self) -> list[dict[str, Any]]:
+        from .message_builder import format_messages
+        return format_messages(self)
 
-    def get_chat_files_messages(self):
-        chat = []
-        cwd = self.root.replace("\\", "/")
-        if self.abs_fnames:
-            wh = "Working directory: " + cwd + "\n\nYou are in this directory. Files added to chat:"
-            fc = wh + "\n\n" + self.gpt_prompts.files_content_prefix + self.get_files_content()
-            fr = self.gpt_prompts.files_content_assistant_reply
-        else:
-            fc = "Working directory: " + cwd + "\n\nNo files added to chat. You CAN explore with list_files, read_file, search_files."
-            fr = "Ok."
-        if self._first_message:
-            self._first_message = False
-            parts = []
-            ws = self._build_workspace_info()
-            if ws: parts.append(ws)
+    def get_chat_files_messages(self) -> list[dict[str, Any]]:
+        from .message_builder import build_chat_files_messages
+        return build_chat_files_messages(self)
 
-            # 文件树（桌面目录跳过，对照 Cline 的 getDesktopDir 检测）
-            if self._file_tree is None:
-                desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-                if os.path.abspath(self.root) == os.path.abspath(desktop):
-                    parts.append("# Current Working Directory Files\n(Desktop files not shown automatically. Use list_files to explore.)\n")
-                else:
-                    self._file_tree = self._build_file_tree()
-            if self._file_tree: parts.append(self._file_tree)
-
-            tools = self._detect_cli_tools()
-            if tools: parts.append(tools)
-
-            # 上下文窗口用量（对照 Cline context window usage）
-            max_tokens = self.main_model.max_input_tokens
-            cur_tokens = self.main_model.token_count(self.done_messages + self.cur_messages)
-            pct = round(cur_tokens / max_tokens * 100) if max_tokens > 0 else 0
-            parts.append("# Context Window\n" + str(cur_tokens) + " / " + str(max_tokens) + " tokens (" + str(pct) + "%)\n")
-
-            # 当前时间（对照 Cline current time）
-            from datetime import datetime
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            parts.append("# Current Time\n" + now + "\n")
-
-            if parts:
-                chat += [dict(role="user", content="\n".join(parts)),
-                         dict(role="assistant", content="Ok, I see the project.")]
-        if fc: chat += [dict(role="user", content=fc), dict(role="assistant", content=fr)]
-        return chat
-
-    def get_repo_map(self):
+    def get_repo_map(self) -> str | None:
         if not self.repo: return None
         try: from ..repomap import RepoMap
         except ImportError: return None
@@ -298,7 +290,7 @@ class Coder:
                      io=self.io, repo_content_prefix=prefix, verbose=self.verbose)
         return rm.get_repo_map(chat_files=chat_rel, other_files=other)
 
-    def run(self, with_message=None):
+    def run(self, with_message: str | None = None) -> str | None:
         self.show_announcements()
         try:
             if with_message: self.run_one(with_message); return self.partial_response_content
@@ -320,7 +312,7 @@ class Coder:
             return None
         return ui
 
-    def run_one(self, user_message):
+    def run_one(self, user_message: str) -> None:
         self.init_before_message()
         message = user_message
         while message:
@@ -336,31 +328,63 @@ class Coder:
         self.reflected_message = None; self.num_reflections = 0
         self.tool_exec_state.reset()
 
-    def send_message(self, message):
+    def send_message(self, message: str) -> None:
         if self.repo: self.commit_before_message.append(self.repo.get_head_commit_sha())
+        if self._first_user_message is None:
+            self._first_user_message = message
+        self._session_token_in += self.main_model.token_count(message) if self.main_model else 0
         self.cur_messages.append(dict(role="user", content=message))
-        for _ in range(5):
+        try:
+            self._send_message_inner()
+        except LLMError as err:
+            self.io.tool_error(
+                f"LLM API FAILURE: {err}\n"
+                f"  Check: API key, network, model availability.\n"
+                f"  Tip: try /model to switch models."
+            )
+            self.done_messages.extend(self.cur_messages); self.cur_messages = []
+
+    def _send_message_inner(self) -> None:
+        for _ in range(MAX_TOOL_CALL_ROUNDS):
             self._trim_context_for_model()
             messages = self.format_messages()
-            try:
-                if self.stream:
-                    resp = self.main_model.send_completion(messages, stream=True)
-                    self._stream_response(resp)
-                else:
-                    c = self.main_model.simple_send(messages)
-                    if c:
-                        self.partial_response_content = c; self.multi_response_content = c
-                        self.io.print_assistant_output(c)
+            # Exponential backoff: 3 retries with 1s / 2s / 4s delays
+            for attempt in range(LLM_MAX_RETRIES):
+                try:
+                    if self.stream:
+                        resp = self.main_model.send_completion(messages, stream=True)
+                        self._stream_response(resp)
                     else:
-                        self.io.tool_error("LLM returned empty response")
-                        self.cur_messages.pop(); return
-            except Exception as err:
-                self.io.tool_error("LLM: " + str(err))
-                self.cur_messages.pop(); return
+                        c = self.main_model.simple_send(messages)
+                        if c:
+                            self.partial_response_content = c; self.multi_response_content = c
+                            self.io.print_assistant_output(c)
+                        else:
+                            self.io.tool_error("LLM returned empty response")
+                            self.cur_messages.pop(); return
+                    break  # success — exit retry loop
+                except Exception as err:
+                    if attempt < LLM_MAX_RETRIES - 1:
+                        delay = 2 ** attempt  # 1s, 2s
+                        self.io.tool_warning(
+                            f"LLM error [{self.main_model.name}] "
+                            f"(retry {attempt + 1}/3 in {delay}s): {err}"
+                        )
+                        time.sleep(delay)
+                    else:
+                        self.cur_messages.pop()
+                        raise LLMError(self.main_model.name, str(err))
+            # Bail out if tool executor hit the consecutive-error limit
+            if self.tool_exec_state.too_many_errors:
+                self.io.tool_warning(
+                    "Too many consecutive tool errors — stopping tool loop. "
+                    "Review the errors above and retry."
+                )
+                ac = self.partial_response_content
+                if ac: self.cur_messages.append(dict(role="assistant", content=ac))
+                break
             had = self._process_tool_calls()
-            self._process_legacy_edits()
             if had:
-                # Strip tool XML from assistant message history for cleaner context
                 from ..tools.parser import parse_xml_tools
                 from ..tools.result import TextBlock
                 blocks = parse_xml_tools(self.partial_response_content, self.tool_registry)
@@ -371,14 +395,40 @@ class Coder:
             else:
                 ac = self.partial_response_content
                 if ac: self.cur_messages.append(dict(role="assistant", content=ac))
-        # 架构师模式：回复完成后触发 plan → editor 流程
+                break
+        # Run legacy edits once, after the tool-call loop finishes
+        self._process_legacy_edits()
+
         if hasattr(self, "reply_completed") and callable(self.reply_completed):
             self.reply_completed()
-
-        edited = self.cur_messages and self.partial_response_content
-        if edited and self.auto_commits and self.repo: self.auto_commit()
+        edited = self.tool_exec_state.had_file_edits
+        if edited and self.auto_commits and self.repo:
+            self.auto_commit()
         self.done_messages.extend(self.cur_messages); self.cur_messages = []
         self.summarize_if_needed()
+        self._save_session()
+
+    def _save_session(self):
+        """Persist the current conversation to disk (non-blocking best-effort)."""
+        if not self.session_id:
+            return
+        try:
+            from ..session import save_session, SessionMeta
+
+            meta = SessionMeta(
+                session_id=self.session_id,
+                created_at=time.time(),
+                updated_at=time.time(),
+                first_message=self._first_user_message or "",
+                model_name=self.main_model.name if self.main_model else "unknown",
+                edit_format=self.edit_format or "whole",
+                token_in=self._session_token_in,
+                token_out=self._session_token_out,
+                root=self.root,
+            )
+            save_session(self.session_id, self.done_messages, self.cur_messages, meta)
+        except Exception:
+            pass  # best-effort — never break the main loop
 
     def _process_tool_calls(self):
         from ..tools.parser import parse_xml_tools
@@ -399,22 +449,63 @@ class Coder:
                 h = RunShellHandler()
                 h.execute(ToolCall("run_shell", {"command": cmd, "requires_approval": "true"}), self)
 
-    def _trim_context_for_model(self):
+    def _trim_context_for_model(self) -> None:
         mt = self.main_model.max_input_tokens
         if mt <= 0: return
         all_msgs = list(self.done_messages) + list(self.cur_messages)
         if self.main_model.token_count(all_msgs) <= mt: return
         ct = self.main_model.token_count(self.cur_messages)
-        avail = mt - ct - 512
+        avail = mt - ct - CONTEXT_RESERVE_TOKENS
         if avail <= 0: return
+
+        # Tier 1: LLM summarization (preserves meaning of old messages)
         if self.summarizer is None:
             try:
                 from ..history import ChatSummary
                 self.summarizer = ChatSummary(models=[self.main_model], max_tokens=avail)
             except Exception: pass
         if self.summarizer and self.summarizer.too_big(self.done_messages):
-            try: self.done_messages = self.summarizer.summarize(self.done_messages)
-            except Exception: pass
+            try:
+                self.done_messages = self.summarizer.summarize(self.done_messages)
+                return
+            except Exception:
+                pass
+
+        # Tier 2: ContextManager truncation
+        self._context_truncate()
+
+    def _context_truncate(self) -> None:
+        """Use ContextManager for tiered truncation when summarization is unavailable."""
+        if self._context_mgr is None:
+            try:
+                from ..context_manager import ContextManager
+                self._context_mgr = ContextManager(
+                    token_counter=self.main_model.token_count,
+                    max_input_tokens=self.main_model.max_input_tokens,
+                )
+            except Exception:
+                self._emergency_truncate()
+                return
+        snap = self._context_mgr.prepare_messages(self.done_messages)
+        if snap.truncated:
+            self.done_messages = snap.messages
+            if self.verbose:
+                self.io.tool_output(
+                    f"Context: {snap.strategy} truncation removed {snap.deleted_count} messages"
+                )
+
+    def _emergency_truncate(self):
+        """Last-resort truncation — removes oldest done_messages."""
+        keep = self.done_messages[-EMERGENCY_KEEP_MESSAGES:]
+        while len(keep) > 1 and keep[0].get("role") != "assistant":
+            keep = keep[1:]
+        deleted = len(self.done_messages) - len(keep)
+        if deleted > 0:
+            notice = {
+                "role": "user",
+                "content": f"[CONTEXT TRUNCATED] {deleted} older messages were removed to stay within the context window."
+            }
+            self.done_messages = [notice] + keep
 
     def summarize_if_needed(self):
         if not self.summarizer:
@@ -437,9 +528,13 @@ class Coder:
             for chunk in response:
                 if chunk.choices and chunk.choices[0].delta:
                     c = chunk.choices[0].delta.content
-                    if c: cc.append(c); self.io.print_streaming(c)
-            print()
-        except Exception as e: self.io.tool_error("Stream: " + str(e))
+                    if c:
+                        cc.append(c)
+                        self.io.print_streaming(c)
+            if not hasattr(self.io, "finalize_streaming"):
+                self.io.tool_output("")
+        except Exception as e:
+            self.io.tool_error("Stream: " + str(e))
         self.partial_response_content = "".join(cc)
         if hasattr(self.io, "finalize_streaming"):
             self.io.finalize_streaming(self.partial_response_content)

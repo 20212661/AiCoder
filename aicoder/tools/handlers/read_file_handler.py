@@ -1,8 +1,11 @@
-"""read_file Handler — 带行号、缓存和去重"""
+"""read_file Handler — 带行号、缓存、去重和路径安全"""
+from __future__ import annotations
 import os, time
 from pathlib import Path
 from .base import ToolHandler
 from ..result import ToolCall, ToolResult
+
+MAX_READ_BYTES = 5 * 1024 * 1024  # 单次读取上限 5MB
 
 DEFAULT_MAX_LINES = 500
 FILE_TRUNCATED_MARKER = "\n\n---\n\n[FILE TRUNCATED:"
@@ -24,11 +27,35 @@ class ReadFileHandler(ToolHandler):
         rel_path = tool_call.get("path")
         full_path = coder.abs_root_path(rel_path)
 
-        if not os.path.isfile(full_path):
+        # 路径遍历保护：确保解析后仍在工作区内
+        resolved = str(Path(full_path).resolve())
+        root_resolved = str(Path(coder.root).resolve())
+        if not resolved.startswith(root_resolved + os.sep) and resolved != root_resolved:
+            return ToolResult.fail(
+                self.name,
+                f"Path traversal blocked: {rel_path} resolves outside workspace {coder.root}"
+            )
+
+        if not os.path.isfile(resolved):
             return ToolResult.fail(self.name, f"File not found: {rel_path}")
 
-        # 去重缓存检查
-        cache_key = full_path.lower()
+        # 文件大小预检
+        try:
+            file_size = os.path.getsize(resolved)
+        except OSError as e:
+            return ToolResult.fail(self.name, f"Cannot stat file: {e}")
+
+        if file_size > MAX_READ_BYTES:
+            return ToolResult.fail(
+                self.name,
+                f"File too large: {file_size} bytes exceeds the {MAX_READ_BYTES} byte limit. "
+                "Use start_line/end_line to read a portion, or use run_shell with head/tail."
+            )
+
+        full_path = resolved
+
+        # 去重缓存检查（保留原始大小写，避免 Linux 上误匹配）
+        cache_key = str(Path(full_path).resolve())
         cached = self._cache.get(cache_key)
         try:
             mtime = os.path.getmtime(full_path)

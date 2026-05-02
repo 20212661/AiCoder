@@ -304,17 +304,26 @@ def replace_closest_edit_distance(whole_lines, part, part_lines, replace_lines):
     min_len = math.floor(len(part_lines) * (1 - scale))
     max_len = math.ceil(len(part_lines) * (1 + scale))
 
+    # Exploded loops — O(n^2) * SequenceMatcher — bail early on perfect match
     for length in range(min_len, max_len):
         for i in range(len(whole_lines) - length + 1):
             chunk = whole_lines[i : i + length]
             chunk = "".join(chunk)
 
             similarity = SequenceMatcher(None, chunk, part).ratio()
+            if similarity <= max_similarity:
+                continue
 
-            if similarity > max_similarity and similarity:
-                max_similarity = similarity
-                most_similar_chunk_start = i
-                most_similar_chunk_end = i + length
+            max_similarity = similarity
+            most_similar_chunk_start = i
+            most_similar_chunk_end = i + length
+
+            if similarity >= 1.0:
+                # Exact match — stop searching immediately
+                break
+        else:
+            continue
+        break
 
     if max_similarity < similarity_thresh:
         return
@@ -387,6 +396,8 @@ def strip_quoted_wrapping(res, fname=None, fence=DEFAULT_FENCE):
         return res
 
     res = res.splitlines()
+    if not res:
+        return ""
 
     if fname and res[0].strip().endswith(Path(fname).name):
         res = res[1:]
@@ -577,7 +588,9 @@ def find_similar_lines(search_lines, content_lines, threshold=0.6):
 
     for i in range(len(content_lines) - len(search_lines) + 1):
         chunk = content_lines[i : i + len(search_lines)]
-        ratio = SequenceMatcher(None, search_lines, chunk).ratio()
+        line_ratio = SequenceMatcher(None, search_lines, chunk).ratio()
+        text_ratio = SequenceMatcher(None, "\n".join(search_lines), "\n".join(chunk)).ratio()
+        ratio = max(line_ratio, text_ratio)
         if ratio > best_ratio:
             best_ratio = ratio
             best_match = chunk

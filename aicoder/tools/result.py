@@ -73,6 +73,7 @@ class ExecutionState:
     last_tool_params: dict = field(default_factory=dict)
     repeated_call_count: int = 0
     did_reject_tool: bool = False
+    had_file_edits: bool = False
     max_repeated_calls: int = 3
     max_consecutive_mistakes: int = 5
     mode: str = "act"
@@ -83,6 +84,7 @@ class ExecutionState:
         self.last_tool_params = {}
         self.repeated_call_count = 0
         self.did_reject_tool = False
+        self.had_file_edits = False
 
     def on_success(self, tool_name: str, params: dict):
         self.consecutive_mistake_count = 0

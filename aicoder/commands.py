@@ -37,25 +37,41 @@ class Commands:
         return bool(inp and inp[0] in "/!")
 
     def get_commands(self) -> list[str]:
-        """获取所有可用命令"""
+        """获取所有可用命令（内置 + 插件）"""
         commands: list[str] = []
+        # 内置命令：通过 cmd_xxx 方法发现
         for attr in dir(self):
             if not attr.startswith("cmd_"):
                 continue
             cmd = attr[4:]
             cmd = cmd.replace("_", "-")
             commands.append("/" + cmd)
+        # 插件命令：从全局注册表获取
+        try:
+            from .plugins import plugin_registry
+            for name in plugin_registry.get_commands():
+                commands.append("/" + name)
+        except ImportError:
+            pass
         return commands
 
     def do_run(self, cmd_name: str, args: str) -> Any:
-        """执行指定命令"""
-        cmd_name = cmd_name.replace("-", "_")
-        cmd_method_name = f"cmd_{cmd_name}"
-        cmd_method = getattr(self, cmd_method_name, None)
-        if not cmd_method:
-            self.io.tool_error(f"Unknown command: /{cmd_name}")
-            return None
-        return cmd_method(args)
+        """执行指定命令（内置优先，回退到插件）"""
+        # 1. 尝试内置命令
+        method_name = cmd_name.replace("-", "_")
+        cmd_method = getattr(self, f"cmd_{method_name}", None)
+        if cmd_method:
+            return cmd_method(args)
+        # 2. 尝试插件命令
+        try:
+            from .plugins import plugin_registry
+            plugin_cmd = plugin_registry.get_commands().get(cmd_name)
+            if plugin_cmd:
+                return plugin_cmd(self, args)
+        except ImportError:
+            pass
+        self.io.tool_error(f"Unknown command: /{cmd_name}")
+        return None
 
     def matching_commands(self, inp: str) -> Optional[tuple[list[str], str, str]]:
         """前缀匹配命令"""
@@ -103,6 +119,17 @@ class Commands:
             doc = getattr(self, attr).__doc__ or ""
             doc = doc.strip().split("\n")[0]
             self.io.tool_output(f"  /{cmd:<15} {doc}")
+        # 显示插件命令
+        try:
+            from .plugins import plugin_registry
+            plugin_cmds = plugin_registry.get_commands()
+            if plugin_cmds:
+                self.io.tool_output("Plugin commands:")
+                for name, func in sorted(plugin_cmds.items()):
+                    doc = (func.__doc__ or "").strip().split("\n")[0]
+                    self.io.tool_output(f"  /{name:<15} {doc}")
+        except ImportError:
+            pass
         self.io.tool_output("  !<command>        Run a shell command")
 
     def cmd_add(self, args: str) -> None:
@@ -214,13 +241,13 @@ class Commands:
     def cmd_plan(self, args: str) -> None:
         """切换到 Plan 模式（只读探索）"""
         self.coder.tool_executor.set_mode("plan")
-        self.coder.tool_prompt_builder.set_mode("plan")
+        self.coder._update_tool_model_info()
         self.io.tool_output("Switched to PLAN MODE. Read-only tools enabled.")
 
     def cmd_act(self, args: str) -> None:
         """切换到 Act 模式（全部工具可用）"""
         self.coder.tool_executor.set_mode("act")
-        self.coder.tool_prompt_builder.set_mode("act")
+        self.coder._update_tool_model_info()
         self.io.tool_output("Switched to ACT MODE. All tools enabled.")
 
     def cmd_undo(self, args: str) -> Optional[str]:
@@ -279,7 +306,7 @@ class Commands:
         self.io.tool_output(f"Removed: {last_commit_hash} {last_commit_message}")
         self.io.tool_output(f"Now at:  {current_hash} {current_msg}")
 
-        from ..prompts import undo_command_reply
+        from .prompts import undo_command_reply
         return undo_command_reply
 
     def cmd_diff(self, args: str = "") -> None:
@@ -332,6 +359,105 @@ class Commands:
         self.coder.done_messages = []
         self.coder.cur_messages = []
         self.io.tool_output("Chat history cleared.")
+
+    def cmd_sessions(self, args: str) -> None:
+        """列出所有历史会话"""
+        from .session import list_sessions, session_count
+        sessions = list_sessions()
+        if not sessions:
+            self.io.tool_output("No saved sessions.")
+            return
+        self.io.tool_output(f"{session_count()} sessions found:\n")
+        for s in sessions[:20]:
+            sid = s.get("session_id", "")[:12]
+            model = s.get("model_name", "?")
+            count = s.get("message_count", 0)
+            first = (s.get("first_message", "") or "")[:50]
+            self.io.tool_output(f"  {sid}  {model}  [{count} msgs]  {first}")
+        count = session_count()
+        if count > 20:
+            self.io.tool_output(f"  ... and {count - 20} more. Use --list-sessions for full list.")
+
+    def cmd_resume(self, args: str) -> None:
+        """恢复之前的会话 /resume <session_id>"""
+        sid = args.strip()
+        if not sid:
+            self.io.tool_error("Usage: /resume <session_id>")
+            return
+        from .session import load_session
+        loaded = load_session(sid)
+        if not loaded:
+            self.io.tool_error(f"Session not found: {sid}")
+            return
+        meta, done, cur = loaded
+        self.coder.done_messages = done
+        self.coder.cur_messages = cur
+        self.coder.session_id = meta.session_id
+        self.coder._first_user_message = meta.first_message
+        self.io.tool_output(f"Resumed session: {sid} ({meta.message_count} messages)")
+
+    def cmd_save(self, args: str) -> None:
+        """手动保存当前会话"""
+        if not self.coder.session_id:
+            self.io.tool_error("Session saving is disabled (--no-save).")
+            return
+        self.coder._save_session()
+        self.io.tool_output(f"Session saved: {self.coder.session_id}")
+
+    def cmd_yolo(self, args: str) -> None:
+        """切换 YOLO 模式（自动批准所有操作）"""
+        if self.coder._approval is None:
+            self.io.tool_error("Approval system not available.")
+            return
+        current = self.coder._approval.settings.yolo
+        self.coder._approval.settings.yolo = not current
+        state = "ON" if self.coder._approval.settings.yolo else "OFF"
+        self.io.tool_output(f"YOLO mode: {state}")
+
+    def cmd_approval(self, args: str) -> None:
+        """显示/修改自动批准设置。用法: /approval [category on|off]"""
+        if self.coder._approval is None:
+            self.io.tool_error("Approval system not available.")
+            return
+        s = self.coder._approval.settings
+        parts = args.strip().split()
+        if len(parts) == 2:
+            cat, state = parts
+            state = state.lower()
+            if hasattr(s, cat) and isinstance(getattr(s, cat), bool):
+                setattr(s, cat, state in ("on", "true", "yes", "1"))
+                from .approval import save_approval_settings
+                save_approval_settings(s)
+                self.io.tool_output(f"  {cat} = {getattr(s, cat)}")
+                return
+            self.io.tool_error(f"Unknown setting: {cat}")
+            return
+        # Display current settings
+        lines = ["Auto-approval settings:"]
+        for name in ["yolo", "auto_approve_all", "read_files", "edit_files",
+                      "execute_safe_cmds", "execute_all_cmds", "list_files",
+                      "search_files", "list_code_defs", "block_dangerous_cmds"]:
+            val = "ON" if getattr(s, name, False) else "OFF"
+            lines.append(f"  {name:<22} {val}")
+        self.io.tool_output("\n".join(lines))
+
+    def cmd_safe(self, args: str) -> None:
+        """检查一个命令是否在安全列表中 /safe <command>"""
+        cmd = args.strip()
+        if not cmd:
+            self.io.tool_output("Usage: /safe <command>")
+            return
+        if self.coder._approval is None:
+            self.io.tool_error("Approval system not available.")
+            return
+        is_safe = self.coder._approval.is_command_safe(cmd)
+        is_dangerous, warning = self.coder._approval.is_command_dangerous(cmd)
+        if is_dangerous:
+            self.io.tool_error(f"DANGEROUS: {warning}")
+        elif is_safe:
+            self.io.tool_output(f"SAFE: {cmd}")
+        else:
+            self.io.tool_output(f"UNKNOWN safety: {cmd} (will ask for approval)")
 
     def cmd_git(self, args: str) -> None:
         """运行 git 命令"""
