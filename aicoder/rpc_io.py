@@ -1,0 +1,246 @@
+"""
+JSON-RPC over stdio 的 IO 实现
+供外部 TUI（如 aicoder-tui）通过子进程 stdio 通信
+"""
+import json
+import sys
+import uuid
+import threading
+from queue import Queue, Empty
+
+from .io import InputOutput
+
+
+class JsonRpcIO(InputOutput):
+    """通过 JSON-RPC stdio 与 TypeScript TUI 通信的 IO 实现"""
+
+    def __init__(self):
+        super().__init__(pretty=False, yes=False)
+        self.reader = sys.stdin
+        self.writer = sys.stdout
+        self._lock = threading.Lock()
+        self._pending_responses: dict[str, Queue] = {}
+        self._reader_thread: threading.Thread | None = None
+        self._running = False
+
+    def start(self):
+        """启动后台 reader 线程"""
+        self._running = True
+        self._reader_thread = threading.Thread(
+            target=self._read_loop, daemon=True
+        )
+        self._reader_thread.start()
+
+    def stop(self):
+        """停止 reader 线程"""
+        self._running = False
+
+    def _read_loop(self):
+        """后台线程：从 stdin 逐行读取 JSON-RPC 消息"""
+        for line in self.reader:
+            if not self._running:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                self._notify("parse_error", {"raw": line})
+                continue
+
+            msg_id = msg.get("id")
+            method = msg.get("method")
+
+            # 响应：匹配 pending request
+            if msg_id and msg_id in self._pending_responses:
+                q = self._pending_responses.pop(msg_id)
+                q.put(msg.get("result"))
+                continue
+
+            # 请求：TUI 发来的方法调用
+            if method:
+                self._handle_request(method, msg.get("params", {}), msg_id)
+
+    def _handle_request(self, method: str, params: dict, msg_id: str | None):
+        """处理来自 TUI 的请求"""
+        if method == "input/submit":
+            text = params.get("text", "")
+            q = self._pending_responses.get("input")
+            if q:
+                q.put(text)
+            return
+
+        if method == "cancel/generation":
+            self._notify("generation_cancelled", {})
+            return
+
+        if method == "session/list":
+            from .session import list_sessions
+            sessions = list_sessions()
+            if msg_id:
+                self._send_response(msg_id, sessions)
+            return
+
+        if method == "session/new":
+            q = self._pending_responses.get("input")
+            if q:
+                q.put("/clear")
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
+            return
+
+        if method == "session/resume":
+            session_id = params.get("id", "")
+            q = self._pending_responses.get("input")
+            if q:
+                q.put(f"/resume {session_id}")
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
+            return
+
+        if msg_id:
+            self._send_response(msg_id, None, error={
+                "code": -32601,
+                "message": f"Unknown method: {method}",
+            })
+
+    def _notify(self, method: str, params: dict | None = None):
+        """发送 JSON-RPC notification（无需响应）"""
+        msg = json.dumps({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params or {},
+        })
+        with self._lock:
+            self.writer.write(msg + "\n")
+            self.writer.flush()
+
+    def _send_response(self, msg_id: str, result, error=None):
+        """发送 JSON-RPC response"""
+        msg = {"jsonrpc": "2.0", "id": msg_id}
+        if error:
+            msg["error"] = error
+        else:
+            msg["result"] = result
+        with self._lock:
+            self.writer.write(json.dumps(msg) + "\n")
+            self.writer.flush()
+
+    def _wait_response(self, request_key: str, timeout: float = 300):
+        """阻塞等待 TUI 回复"""
+        q = Queue()
+        self._pending_responses[request_key] = q
+        try:
+            return q.get(timeout=timeout)
+        except Empty:
+            return None
+        finally:
+            self._pending_responses.pop(request_key, None)
+
+    # ── InputOutput 接口实现 ──
+
+    def get_input(self, root, inchat_files, addable_files, commands,
+                  read_only_fnames, edit_format=""):
+        """等待 TUI 发送用户输入"""
+        self._notify("input/request", {
+            "root": root,
+            "inchat_files": list(inchat_files) if inchat_files else [],
+            "addable_files": list(addable_files) if addable_files else [],
+            "commands": list(commands) if commands else [],
+        })
+        return self._wait_response("input")
+
+    def tool_output(self, message="", bold=False):
+        self._notify("tool/output", {"message": message, "bold": bold})
+
+    def tool_error(self, message=""):
+        self._notify("tool/error", {"message": message})
+
+    def tool_warning(self, message=""):
+        self._notify("tool/warning", {"message": message})
+
+    def user_input(self, message, log_only=True):
+        if not log_only:
+            self._notify("user_input", {"message": message})
+
+    def confirm_ask(self, question, default="y"):
+        approval_id = str(uuid.uuid4())
+        self._notify("confirm/ask", {
+            "id": approval_id,
+            "question": question,
+            "default": default,
+        })
+        result = self._wait_response(approval_id)
+        if result is None:
+            return default == "y"
+        return bool(result)
+
+    def approval_request(self, question, diff=None):
+        """审批请求（用于文件编辑等操作）"""
+        approval_id = str(uuid.uuid4())
+        self._notify("approval/request", {
+            "id": approval_id,
+            "question": question,
+            "diff": diff,
+        })
+        result = self._wait_response(approval_id)
+        return bool(result)
+
+    def print_assistant_output(self, text):
+        self._notify("assistant/output", {"text": text})
+
+    def print_streaming(self, chunk):
+        self._notify("stream/token", {"text": chunk})
+
+    def finalize_streaming(self, full_text):
+        self._notify("stream/finalize", {"text": full_text})
+
+    def serve(self, coder):
+        """进入 RPC 服务主循环"""
+        self.start()
+        self._notify("ready", {
+            "model": coder.main_model.name if coder.main_model else "unknown",
+        })
+
+        try:
+            from .commands import SwitchCoder
+
+            while self._running:
+                try:
+                    user_input = self.get_input(
+                        coder.root,
+                        coder.get_inchat_relative_files(),
+                        coder.get_addable_relative_files(),
+                        [],
+                        [],
+                    )
+                    if user_input is None:
+                        break
+
+                    # 处理斜杠命令
+                    if user_input.startswith("/"):
+                        if user_input.strip() == "/quit":
+                            break
+                        if user_input.strip() == "/clear":
+                            coder.done_messages = []
+                            coder.cur_messages = []
+                            continue
+
+                    result = coder.run(with_message=user_input)
+                    if isinstance(result, SwitchCoder):
+                        kwargs = result.kwargs
+                        kwargs["io"] = self
+                        kwargs.setdefault("fnames", list(coder.abs_fnames))
+                        coder = Coder.create(**kwargs)
+                        if hasattr(coder, '_approval') and hasattr(self, '_approval'):
+                            pass
+
+                except KeyboardInterrupt:
+                    break
+                except Exception as e:
+                    self._notify("error", {"message": str(e)})
+
+        finally:
+            self.stop()
+            self._notify("shutdown", {})

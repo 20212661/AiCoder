@@ -25,13 +25,23 @@ class ListCodeDefsHandler(ToolHandler):
         rel_path = tool_call.get("path")
         full_path = coder.abs_root_path(rel_path)
 
-        if not os.path.isdir(full_path):
-            if os.path.isfile(full_path):
-                return ToolResult.fail(
+        # 支持单文件：直接解析该文件
+        if os.path.isfile(full_path):
+            ext = os.path.splitext(full_path)[1].lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                return ToolResult.ok(
                     self.name,
-                    f"Path is a file, not a directory. Use read_file to read its contents."
+                    f"Unsupported file type: {ext}. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
                 )
-            return ToolResult.fail(self.name, f"Directory not found: {rel_path}")
+            result = self._extract_definitions(
+                os.path.dirname(full_path), [full_path], os.path.dirname(rel_path) or "."
+            )
+            if not result.strip():
+                return ToolResult.ok(self.name, f"No definitions found in {rel_path}")
+            return ToolResult.ok(self.name, result)
+
+        if not os.path.isdir(full_path):
+            return ToolResult.fail(self.name, f"Path not found: {rel_path}")
 
         # 收集顶层源文件（非递归）
         source_files = self._collect_source_files(full_path)
