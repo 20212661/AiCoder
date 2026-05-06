@@ -1,4 +1,4 @@
-import { Box } from "ink";
+import { Box, Text } from "../../ink/index.js";
 import type { ChatMessage, MessageBlock } from "../../stores/chatStore.js";
 import { TextBlock } from "./TextBlock.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
@@ -35,6 +35,12 @@ function BlockRenderer({ block }: { block: MessageBlock }) {
           status={block.status}
           result={block.result}
         />
+      );
+    case "error":
+      return (
+        <Box marginLeft={2}>
+          <Text color="#ff6b6b">✗ {block.content}</Text>
+        </Box>
       );
     default:
       return null;

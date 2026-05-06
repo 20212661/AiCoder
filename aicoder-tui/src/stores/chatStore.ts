@@ -24,7 +24,12 @@ export interface ToolCallBlock {
   result?: string;
 }
 
-export type MessageBlock = TextBlock | ThinkingBlock | CodeBlock | ToolCallBlock;
+export interface ErrorBlock {
+  type: "error";
+  content: string;
+}
+
+export type MessageBlock = TextBlock | ThinkingBlock | CodeBlock | ToolCallBlock | ErrorBlock;
 
 export interface ChatMessage {
   id: string;
@@ -45,6 +50,7 @@ interface ChatState {
   finalizeStream: (fullText: string) => void;
   addToolCall: (tool: string, args: Record<string, unknown>) => void;
   updateToolResult: (tool: string, result: string, success: boolean) => void;
+  addErrorMessage: (message: string) => void;
   clearChat: () => void;
 }
 
@@ -52,6 +58,10 @@ let msgIdCounter = 0;
 function nextId(): string {
   return `msg-${Date.now()}-${++msgIdCounter}`;
 }
+
+// Token buffer: accumulate tokens and flush at 50ms intervals to reduce renders
+let tokenBuffer = "";
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
@@ -87,10 +97,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   appendStreamToken(token) {
-    set((s) => ({ streamingText: s.streamingText + token }));
+    tokenBuffer += token;
+    if (!flushTimer) {
+      flushTimer = setTimeout(() => {
+        const buffered = tokenBuffer;
+        tokenBuffer = "";
+        flushTimer = null;
+        if (buffered) {
+          set((s) => ({ streamingText: s.streamingText + buffered }));
+        }
+      }, 50);
+    }
   },
 
   finalizeStream(fullText) {
+    // Flush any remaining buffered tokens
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    tokenBuffer = "";
+
     const { currentAssistantId, messages } = get();
     if (!currentAssistantId) return;
 
@@ -150,7 +177,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
+  addErrorMessage(message) {
+    const { messages } = get();
+    const errMsg: ChatMessage = {
+      id: nextId(),
+      role: "assistant",
+      blocks: [{ type: "error", content: message }],
+      timestamp: Date.now(),
+    };
+    set({ messages: [...messages, errMsg] });
+  },
+
   clearChat() {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    tokenBuffer = "";
     set({
       messages: [],
       isStreaming: false,

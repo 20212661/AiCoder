@@ -38,7 +38,7 @@ class Coder:
         self.summarizer = None; self.commit_before_message = []
         self._context_mgr = None  # initialised lazily in _trim_context_for_model
         self.commands = Commands(io, self); self.root = os.getcwd()
-        self._first_message = True; self._file_tree = None
+        self._first_message = True; self._file_tree = None; self._repo_map_inst = None
         self.session_id = session_id
         self._first_user_message = None
         self._session_token_in = 0
@@ -271,8 +271,20 @@ class Coder:
         return "\n".join(lines)
 
     def format_messages(self) -> list[dict[str, Any]]:
-        from .message_builder import format_messages
-        return format_messages(self)
+        import sys as _sys
+        from .message_builder import format_messages, build_system_messages, build_chat_files_messages
+        _sys.stderr.write("[DBG]   build_system_messages\n"); _sys.stderr.flush()
+        msgs = list(build_system_messages(self))
+        msgs.extend(self.done_messages)
+        _sys.stderr.write("[DBG]   get_repo_map\n"); _sys.stderr.flush()
+        repo_map = self.get_repo_map()
+        _sys.stderr.write(f"[DBG]   repo_map={bool(repo_map)}\n"); _sys.stderr.flush()
+        if repo_map:
+            msgs += [dict(role="user", content=repo_map), dict(role="assistant", content="Ok.")]
+        _sys.stderr.write("[DBG]   build_chat_files\n"); _sys.stderr.flush()
+        msgs.extend(build_chat_files_messages(self))
+        msgs.extend(self.cur_messages)
+        return msgs
 
     def get_chat_files_messages(self) -> list[dict[str, Any]]:
         from .message_builder import build_chat_files_messages
@@ -280,15 +292,9 @@ class Coder:
 
     def get_repo_map(self) -> str | None:
         if not self.repo: return None
-        try: from ..repomap import RepoMap
-        except ImportError: return None
-        chat_rel = set(self.get_inchat_relative_files())
-        other = set(self.repo.get_tracked_files()) - chat_rel
-        if not other: return None
-        prefix = getattr(self.gpt_prompts, "repo_content_prefix", "")
-        rm = RepoMap(map_tokens=self.map_tokens, root=self.root, main_model=self.main_model,
-                     io=self.io, repo_content_prefix=prefix, verbose=self.verbose)
-        return rm.get_repo_map(chat_files=chat_rel, other_files=other)
+        # TODO: repo_map 用 tree-sitter 解析全仓库，189 个文件首次解析太慢（>15s）。
+        # 暂时跳过，后续优化：限制文件数 + 惰性缓存 + 后台预计算。
+        return None
 
     def run(self, with_message: str | None = None) -> str | None:
         self.show_announcements()
@@ -345,15 +351,21 @@ class Coder:
             self.done_messages.extend(self.cur_messages); self.cur_messages = []
 
     def _send_message_inner(self) -> None:
+        import sys as _sys
         for _ in range(MAX_TOOL_CALL_ROUNDS):
+            _sys.stderr.write("[DBG] _trim_context\n"); _sys.stderr.flush()
             self._trim_context_for_model()
+            _sys.stderr.write("[DBG] format_messages\n"); _sys.stderr.flush()
             messages = self.format_messages()
             # Exponential backoff: 3 retries with 1s / 2s / 4s delays
             for attempt in range(LLM_MAX_RETRIES):
                 try:
+                    _sys.stderr.write(f"[DBG] send_completion stream={self.stream} msgs={len(messages)}\n"); _sys.stderr.flush()
                     if self.stream:
                         resp = self.main_model.send_completion(messages, stream=True)
+                        _sys.stderr.write("[DBG] got iterator\n"); _sys.stderr.flush()
                         self._stream_response(resp)
+                        _sys.stderr.write("[DBG] stream done\n"); _sys.stderr.flush()
                     else:
                         c = self.main_model.simple_send(messages)
                         if c:

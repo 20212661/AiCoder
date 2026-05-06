@@ -1,42 +1,15 @@
 import chalk from "chalk";
-import { highlight } from "cli-highlight";
+import hljs from "highlight.js";
 
 export function renderCodeBlock(code: string, language?: string): string {
   try {
-    return highlight(code.trim(), {
-      language: language || "plaintext",
-      theme: {
-        keyword: chalk.hex("#c678dd"),
-        built_in: chalk.hex("#e5c07b"),
-        type: chalk.hex("#e5c07b"),
-        literal: chalk.hex("#d19a66"),
-        number: chalk.hex("#d19a66"),
-        regexp: chalk.hex("#98c379"),
-        string: chalk.hex("#98c379"),
-        subst: chalk.hex("#e06c75"),
-        symbol: chalk.hex("#61afef"),
-        class: chalk.hex("#e5c07b").bold,
-        function: chalk.hex("#61afef"),
-        title: chalk.hex("#61afef"),
-        params: chalk.hex("#abb2bf"),
-        comment: chalk.hex("#5c6370").italic,
-        doctag: chalk.hex("#c678dd"),
-        meta: chalk.hex("#61afef"),
-        section: chalk.hex("#e06c75"),
-        tag: chalk.hex("#e06c75"),
-        name: chalk.hex("#e06c75"),
-        attr: chalk.hex("#d19a66"),
-        attribute: chalk.hex("#98c379"),
-        variable: chalk.hex("#e06c75"),
-        bullet: chalk.hex("#61afef"),
-        code: chalk.hex("#98c379"),
-        emphasis: chalk.italic,
-        strong: chalk.bold,
-        formula: chalk.hex("#abb2bf"),
-        addition: chalk.hex("#98c379"),
-        deletion: chalk.hex("#e06c75"),
-      },
-    });
+    let result: string;
+    if (language && hljs.getLanguage(language)) {
+      result = hljs.highlight(code.trim(), { language }).value;
+    } else {
+      result = hljs.highlightAuto(code.trim()).value;
+    }
+    return result;
   } catch {
     return code;
   }

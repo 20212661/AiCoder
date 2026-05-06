@@ -3,7 +3,6 @@ import { RpcClient } from "../rpc/client.js";
 import { createBackendApi } from "../rpc/methods.js";
 import { useChatStore } from "../stores/chatStore.js";
 import { useApprovalStore } from "../stores/approvalStore.js";
-import { useToolStore } from "../stores/toolStore.js";
 import { useConfigStore } from "../stores/configStore.js";
 import type { BackendApi } from "../rpc/methods.js";
 
@@ -12,12 +11,14 @@ let apiInstance: BackendApi | null = null;
 
 export function useBackend() {
   const rpcRef = useRef<RpcClient | null>(null);
+  const apiRef = useRef<BackendApi | null>(null);
 
   const connect = useCallback(async () => {
     const rpc = new RpcClient();
     rpcRef.current = rpc;
     rpcInstance = rpc;
     apiInstance = createBackendApi(rpc);
+    apiRef.current = apiInstance;
 
     // Wire backend notifications to stores
     rpc.on("stream/token", (params: { text: string }) => {
@@ -39,12 +40,10 @@ export function useBackend() {
     });
 
     rpc.on("tool/call_started", (params: { tool: string; args: Record<string, unknown> }) => {
-      useToolStore.getState().startTool(params.tool, params.args);
       useChatStore.getState().addToolCall(params.tool, params.args);
     });
 
     rpc.on("tool/call_finished", (params: { tool: string; result: string; success: boolean }) => {
-      useToolStore.getState().finishTool(params.tool, params.result, params.success);
       useChatStore.getState().updateToolResult(params.tool, params.result, params.success);
     });
 
@@ -60,6 +59,26 @@ export function useBackend() {
       useConfigStore.getState().updateFromBackend(params);
     });
 
+    rpc.on("error", (params: { message: string }) => {
+      const store = useChatStore.getState();
+      if (store.isStreaming) {
+        store.finalizeStream("");
+      }
+      store.addErrorMessage(params.message);
+    });
+
+    rpc.on("tool/error", (params: { message: string }) => {
+      useChatStore.getState().addErrorMessage(params.message);
+    });
+
+    // Forward backend stderr to console for debugging
+    rpc.on("stderr", (data: string) => {
+      const line = data.trim();
+      if (line) {
+        useChatStore.getState().addErrorMessage("[backend] " + line);
+      }
+    });
+
     await rpc.connect();
   }, []);
 
@@ -68,6 +87,7 @@ export function useBackend() {
     rpcRef.current = null;
     rpcInstance = null;
     apiInstance = null;
+    apiRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -76,11 +96,14 @@ export function useBackend() {
     };
   }, [disconnect]);
 
+  const getRpc = useCallback(() => rpcRef.current, []);
+  const getApi = useCallback(() => apiRef.current, []);
+
   return {
     connect,
     disconnect,
-    getRpc: () => rpcRef.current,
-    getApi: () => apiInstance,
+    getRpc,
+    getApi,
   };
 }
 
@@ -89,5 +112,8 @@ export function getRpcClient(): RpcClient | null {
 }
 
 export function getBackendApi(): BackendApi | null {
-  return apiInstance;
+  // First try the module-level variable (fast path)
+  if (apiInstance) return apiInstance;
+  // Fall back to rpcInstance
+  return rpcInstance ? createBackendApi(rpcInstance) : null;
 }

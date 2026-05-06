@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import { Box, Text } from "ink";
+import Box from "./design-system/ThemedBox.js";
+import Text from "./design-system/ThemedText.js";
+import useInput from "./ink/hooks/use-input.js";
+import useApp from "./ink/hooks/use-app.js";
 import { ChatPanel } from "./components/chat/ChatPanel.js";
 import { StatusBar } from "./components/layout/StatusBar.js";
 import { ApprovalDialog } from "./components/approval/ApprovalDialog.js";
 import { useBackend } from "./hooks/useBackend.js";
 import { useChatStore } from "./stores/chatStore.js";
 import { useConfigStore } from "./stores/configStore.js";
-import { WhimsicalSpinner } from "./components/common/Spinner.js";
+import { getBackendApi } from "./hooks/useBackend.js";
 
 type AppState = "connecting" | "ready" | "error";
 
@@ -14,6 +17,7 @@ export function App() {
   const [state, setState] = useState<AppState>("connecting");
   const [errorMsg, setErrorMsg] = useState("");
   const { connect, disconnect, getRpc } = useBackend();
+  const { exit } = useApp();
 
   useEffect(() => {
     async function init() {
@@ -29,19 +33,32 @@ export function App() {
     return () => { disconnect(); };
   }, [connect, disconnect, getRpc]);
 
+  useInput((input, key) => {
+    if (key.escape) {
+      const store = useChatStore.getState();
+      if (store.isStreaming) {
+        getBackendApi()?.cancelGeneration();
+        store.finalizeStream("");
+      }
+    }
+    if (key.ctrl && input === "c") {
+      exit();
+    }
+  });
+
   if (state === "connecting") {
     return (
-      <Box flexDirection="column" paddingY={1}>
-        <Text bold color="#9fcaff">AiCoder</Text>
-        <WhimsicalSpinner />
+      <Box flexDirection="column" style={{ paddingY: 1 }}>
+        <Text bold color="claude">AiCoder</Text>
+        <Text dimColor>Connecting...</Text>
       </Box>
     );
   }
 
   if (state === "error") {
     return (
-      <Box flexDirection="column" paddingY={1}>
-        <Text color="#ff6b6b">Error: {errorMsg}</Text>
+      <Box flexDirection="column" style={{ paddingY: 1 }}>
+        <Text color="error">Error: {errorMsg}</Text>
         <Text dimColor>python -m aicoder --serve</Text>
       </Box>
     );
@@ -64,11 +81,20 @@ function WelcomeBanner() {
   if (messages.length > 0) return null;
 
   return (
-    <Box flexDirection="column" marginY={1}>
-      <Text bold color="#9fcaff">AiCoder v0.6.0</Text>
-      <Text dimColor>Model: {model}   Mode: ACT</Text>
-      <Text dimColor>{"─".repeat(40)}</Text>
-      <Text dimColor>Type a message to start chatting.</Text>
+    <Box flexDirection="column">
+      <Box>
+        <Box flexDirection="column">
+          <Text color="claude">{" ▐▛███▜▌  "}</Text>
+          <Text color="claude">{"▝▜█████▛▘  "}</Text>
+          <Text color="claude">{"  ▘▘ ▝▝    "}</Text>
+        </Box>
+        <Box flexDirection="column" justifyContent="center">
+          <Text bold color="claude">{" AiCoder v0.6.0"}</Text>
+          <Text dimColor>{" " + model + " · AI Pair Programming"}</Text>
+          <Text dimColor>{" " + process.cwd().replace(/\\/g, "/")}</Text>
+        </Box>
+      </Box>
+      <Text dimColor>{"─".repeat(80)}</Text>
     </Box>
   );
 }

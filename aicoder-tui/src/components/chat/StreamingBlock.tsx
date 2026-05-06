@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text } from "../../ink/index.js";
 import { WhimsicalSpinner } from "../common/Spinner.js";
 
 interface Props {
@@ -20,7 +20,7 @@ export function StreamingBlock({ text }: Props) {
           ))}
         </Box>
       )}
-      <Text>{lastLine}</Text>
+      <Text>{lastLine}▎</Text>
     </Box>
   );
 }

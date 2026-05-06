@@ -11,15 +11,24 @@ from queue import Queue, Empty
 from .io import InputOutput
 
 
+def _ensure_utf8(stream):
+    """Wrap a text stream to guarantee UTF-8 encoding (fixes Windows GBK default)."""
+    if stream.encoding and stream.encoding.lower().replace("-", "") == "utf8":
+        return stream
+    import io
+    return io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+
+
 class JsonRpcIO(InputOutput):
     """通过 JSON-RPC stdio 与 TypeScript TUI 通信的 IO 实现"""
 
     def __init__(self):
         super().__init__(pretty=False, yes=False)
-        self.reader = sys.stdin
-        self.writer = sys.stdout
+        self.reader = _ensure_utf8(sys.stdin)
+        self.writer = _ensure_utf8(sys.stdout)
         self._lock = threading.Lock()
         self._pending_responses: dict[str, Queue] = {}
+        self._input_queue: Queue = Queue()  # 持久化输入队列，防止消息丢失
         self._reader_thread: threading.Thread | None = None
         self._running = False
 
@@ -37,12 +46,15 @@ class JsonRpcIO(InputOutput):
 
     def _read_loop(self):
         """后台线程：从 stdin 逐行读取 JSON-RPC 消息"""
-        for line in self.reader:
+        sys.stderr.write("[rpc] read_loop started\n"); sys.stderr.flush()
+        try:
+          for line in self.reader:
             if not self._running:
                 break
             line = line.strip()
             if not line:
                 continue
+            sys.stderr.write(f"[rpc] recv: {line[:120]}\n"); sys.stderr.flush()
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
@@ -61,18 +73,42 @@ class JsonRpcIO(InputOutput):
             # 请求：TUI 发来的方法调用
             if method:
                 self._handle_request(method, msg.get("params", {}), msg_id)
+        except Exception as e:
+            sys.stderr.write(f"[rpc] read_loop CRASHED: {e}\n"); sys.stderr.flush()
 
     def _handle_request(self, method: str, params: dict, msg_id: str | None):
         """处理来自 TUI 的请求"""
         if method == "input/submit":
             text = params.get("text", "")
-            q = self._pending_responses.get("input")
-            if q:
-                q.put(text)
+            self._input_queue.put(text)  # 始终入队，不丢失
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
             return
 
         if method == "cancel/generation":
             self._notify("generation_cancelled", {})
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
+            return
+
+        if method == "approval/respond":
+            approval_id = params.get("id", "")
+            approved = params.get("approved", False)
+            q = self._pending_responses.get(approval_id)
+            if q:
+                q.put(approved)
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
+            return
+
+        if method == "confirm/respond":
+            confirm_id = params.get("id", "")
+            confirmed = params.get("confirmed", False)
+            q = self._pending_responses.get(confirm_id)
+            if q:
+                q.put(confirmed)
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
             return
 
         if method == "session/list":
@@ -83,18 +119,14 @@ class JsonRpcIO(InputOutput):
             return
 
         if method == "session/new":
-            q = self._pending_responses.get("input")
-            if q:
-                q.put("/clear")
+            self._input_queue.put("/clear")
             if msg_id:
                 self._send_response(msg_id, {"status": "ok"})
             return
 
         if method == "session/resume":
             session_id = params.get("id", "")
-            q = self._pending_responses.get("input")
-            if q:
-                q.put(f"/resume {session_id}")
+            self._input_queue.put(f"/resume {session_id}")
             if msg_id:
                 self._send_response(msg_id, {"status": "ok"})
             return
@@ -142,14 +174,17 @@ class JsonRpcIO(InputOutput):
 
     def get_input(self, root, inchat_files, addable_files, commands,
                   read_only_fnames, edit_format=""):
-        """等待 TUI 发送用户输入"""
+        """等待 TUI 发送用户输入（支持排队）"""
         self._notify("input/request", {
             "root": root,
             "inchat_files": list(inchat_files) if inchat_files else [],
             "addable_files": list(addable_files) if addable_files else [],
             "commands": list(commands) if commands else [],
         })
-        return self._wait_response("input")
+        try:
+            return self._input_queue.get(timeout=300)
+        except Empty:
+            return None
 
     def tool_output(self, message="", bold=False):
         self._notify("tool/output", {"message": message, "bold": bold})
@@ -199,6 +234,7 @@ class JsonRpcIO(InputOutput):
     def serve(self, coder):
         """进入 RPC 服务主循环"""
         self.start()
+        sys.stderr.write(f"[rpc] serve started, model={coder.main_model.name}\n"); sys.stderr.flush()
         self._notify("ready", {
             "model": coder.main_model.name if coder.main_model else "unknown",
         })
@@ -218,6 +254,8 @@ class JsonRpcIO(InputOutput):
                     if user_input is None:
                         break
 
+                    sys.stderr.write(f"[rpc] got input: {user_input[:60]!r}\n"); sys.stderr.flush()
+
                     # 处理斜杠命令
                     if user_input.startswith("/"):
                         if user_input.strip() == "/quit":
@@ -227,7 +265,9 @@ class JsonRpcIO(InputOutput):
                             coder.cur_messages = []
                             continue
 
+                    sys.stderr.write("[rpc] calling coder.run()\n"); sys.stderr.flush()
                     result = coder.run(with_message=user_input)
+                    sys.stderr.write("[rpc] coder.run() done\n"); sys.stderr.flush()
                     if isinstance(result, SwitchCoder):
                         kwargs = result.kwargs
                         kwargs["io"] = self

@@ -1,9 +1,17 @@
 #!/usr/bin/env node
-import { render } from "ink";
+import React from "react";
+import { renderSync } from "./ink/root.js";
+import { ThemeProvider } from "./design-system/ThemeProvider.js";
 import { App } from "./App.js";
 
 async function main() {
-  const { waitUntilExit } = render(<App />);
+  const { waitUntilExit } = renderSync(
+    React.createElement(ThemeProvider, null, React.createElement(App)),
+    {
+      exitOnCtrlC: false,
+      patchConsole: true,
+    },
+  );
   await waitUntilExit();
   process.exit(0);
 }

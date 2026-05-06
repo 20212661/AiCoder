@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text } from "../../ink/index.js";
 import type { ChatMessage } from "../../stores/chatStore.js";
 
 interface Props {
@@ -9,9 +9,8 @@ export function UserMessage({ message }: Props) {
   const text = message.blocks.find((b) => b.type === "text")?.content ?? "";
 
   return (
-    <Box flexDirection="column" marginY={0}>
-      <Text color="#666">{"─".repeat(2)}</Text>
-      <Text>{text}</Text>
+    <Box flexDirection="column" marginTop={0}>
+      <Text dim>{">"} {text}</Text>
     </Box>
   );
 }

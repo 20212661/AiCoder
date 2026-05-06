@@ -9,8 +9,6 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: true,
-  banner: {
-    js: '#!/usr/bin/env node',
-  },
-  external: ["react", "ink"],
+  external: ["react", "react-reconciler", "react/jsx-runtime"],
+  tsconfig: "./tsconfig.json",
 });

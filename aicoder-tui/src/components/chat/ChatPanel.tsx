@@ -1,4 +1,4 @@
-import { Box } from "ink";
+import { Box } from "../../ink/index.js";
 import { useChatStore } from "../../stores/chatStore.js";
 import { UserMessage } from "./UserMessage.js";
 import { AiMessage } from "./AiMessage.js";

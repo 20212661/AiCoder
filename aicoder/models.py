@@ -284,6 +284,7 @@ class Model:
     def send_completion(self, messages, functions=None, stream=False, temperature=None):
         kwargs = dict(model=self.backend_model, messages=messages, stream=stream)
         kwargs["max_tokens"] = self.max_output_tokens
+        kwargs["timeout"] = 60  # 60秒超时，防止无限挂起
         if temperature is not None:
             kwargs["temperature"] = temperature
         if functions:
