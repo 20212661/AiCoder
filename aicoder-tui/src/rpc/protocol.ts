@@ -37,8 +37,13 @@ export interface BackendNotifications {
   "tool/error": { message: string };
   "approval/request": { id: string; question: string; diff?: string };
   "confirm/ask": { id: string; question: string };
-  "input/request": { root: string };
-  "status/update": { model?: string; tokens?: number; cost?: number };
+  "input/request": {
+    root: string;
+    commands?: string[];
+    inchat_files?: string[];
+    addable_files?: string[];
+  };
+  "status/update": { model?: string; tokens?: number; cost?: number; planMode?: boolean };
 }
 
 // TUI → Backend requests
@@ -47,6 +52,7 @@ export interface BackendRequests {
   "confirm/respond": { id: string; confirmed: boolean };
   "input/submit": { text: string };
   "cancel/generation": {};
+  "model/list": {};
   "session/list": {};
   "session/resume": { id: string };
   "session/new": {};

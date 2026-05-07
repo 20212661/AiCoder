@@ -7,6 +7,9 @@ export interface AppConfig {
   showThinking: boolean;
   planMode: boolean;
   yolo: boolean;
+  commands: string[];
+  availableModels: string[];
+  workspaceRoot?: string;
 }
 
 interface ConfigState extends AppConfig {
@@ -16,6 +19,9 @@ interface ConfigState extends AppConfig {
   toggleThinking: () => void;
   togglePlanMode: () => void;
   toggleYolo: () => void;
+  setCommands: (commands: string[]) => void;
+  setAvailableModels: (models: string[]) => void;
+  setWorkspaceRoot: (root: string) => void;
   updateFromBackend: (params: Record<string, unknown>) => void;
 }
 
@@ -26,6 +32,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
   showThinking: false,
   planMode: false,
   yolo: false,
+  commands: [],
+  availableModels: [],
 
   setModel(model) {
     set({ model });
@@ -45,9 +53,19 @@ export const useConfigStore = create<ConfigState>((set) => ({
   toggleYolo() {
     set((s) => ({ yolo: !s.yolo }));
   },
+  setCommands(commands) {
+    set({ commands });
+  },
+  setAvailableModels(availableModels) {
+    set({ availableModels });
+  },
+  setWorkspaceRoot(workspaceRoot) {
+    set({ workspaceRoot });
+  },
   updateFromBackend(params) {
     const updates: Partial<AppConfig> = {};
     if (params.model && typeof params.model === "string") updates.model = params.model;
+    if (typeof params.planMode === "boolean") updates.planMode = params.planMode;
     set(updates);
   },
 }));

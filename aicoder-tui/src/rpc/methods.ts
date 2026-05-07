@@ -1,5 +1,10 @@
 import type { RpcClient } from "./client.js";
 
+export interface ModelListResponse {
+  models: string[];
+  currentModel: string;
+}
+
 export function createBackendApi(rpc: RpcClient) {
   return {
     submitInput(text: string) {
@@ -8,6 +13,10 @@ export function createBackendApi(rpc: RpcClient) {
 
     cancelGeneration() {
       return rpc.request("cancel/generation", {});
+    },
+
+    listModels() {
+      return rpc.request<ModelListResponse>("model/list", {});
     },
 
     approvalRespond(id: string, approved: boolean) {

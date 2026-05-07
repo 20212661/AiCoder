@@ -186,7 +186,8 @@ class ToolExecutor:
         result = last_result
 
         if structured_io:
-            self._coder.io.tool_call_finished(result, tool_call.params)
+            present_result = self._format_result_for_ui(tool_call, result)
+            self._coder.io.tool_call_finished(present_result, tool_call.params)
             if result.success:
                 self._state.on_success(tool_call.name, tool_call.params)
                 if tool_call.name in FILE_EDIT_TOOLS:
@@ -208,6 +209,46 @@ class ToolExecutor:
                 self._state.had_file_edits = True
 
         return result
+
+    def _format_result_for_ui(self, tool_call: ToolCall, result: ToolResult) -> ToolResult:
+        if not self._state.is_plan_mode:
+            return result
+
+        text = result.output if result.success else (result.error or result.output)
+        summary = self._summarize_plan_result(tool_call.name, text)
+        if result.success:
+            return ToolResult.ok(result.tool_name, summary, meta=result.meta)
+        return ToolResult.fail(result.tool_name, summary, meta=result.meta)
+
+    @staticmethod
+    def _summarize_plan_result(tool_name: str, text: str) -> str:
+        stripped = (text or "").strip()
+        if not stripped:
+            return "Completed."
+
+        lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+        first = lines[0] if lines else "Completed."
+
+        if tool_name == "list_files":
+            entry_count = max(0, len(lines) - 1) if lines and lines[0].lower().startswith("contents of") else len(lines)
+            return f"Scanned directory contents ({entry_count} lines)."
+
+        if tool_name == "read_file":
+            for line in lines:
+                if "|" in line:
+                    return "Loaded file content for inspection."
+            return "Read file."
+
+        if tool_name == "search_files":
+            return f"Search completed. {first[:120]}"
+
+        if tool_name == "list_code_defs":
+            return f"Extracted code definitions. {first[:120]}"
+
+        if tool_name == "run_shell":
+            return f"Ran shell command. {first[:120]}"
+
+        return first[:160]
 
     def _resolve_timeout(self, tool_call: ToolCall, handler: ToolHandler) -> float:
         """解析工具超时时间：优先 tool_call 参数 > handler 属性 > 默认值"""

@@ -122,6 +122,17 @@ You are in PLAN MODE. In this mode:
 - You CAN use read-only tools: read_file, search_files, list_files, list_code_defs, run_shell
 - You CANNOT use write tools: edit_file, write_file (they will be blocked)
 - Focus on gathering information, analyzing code, and architecting solutions
+- Keep tool usage minimal and purposeful. Do not narrate your exploration with phrases like 'Let me...' or 'Now I will...'
+- Do not expose raw XML tool tags in normal assistant text
+- After enough exploration, present a concise final plan and stop
+- Prefer a short final structure:
+  Plan:
+  1. ...
+  2. ...
+  Findings:
+  - ...
+  Next step:
+  - Switch to /act to implement
 - When you have a plan, present it clearly and wait for user feedback
 - The user will switch to ACT MODE when ready to execute"""
         else:

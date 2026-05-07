@@ -191,6 +191,11 @@ def _get_sorted_keys():
     return sorted(_load_models().keys(), key=len, reverse=True)
 
 
+def list_model_names() -> list[str]:
+    """Return all known model names in stable sorted order."""
+    return sorted(_load_models().keys())
+
+
 def _resolve_model_limits(model_name: str) -> dict[str, int]:
     """解析模型的 token 限制"""
     models = _load_models()

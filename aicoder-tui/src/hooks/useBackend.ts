@@ -41,9 +41,11 @@ export function useBackend() {
 
     rpc.on("tool/call_started", (params: { tool: string; args: Record<string, unknown> }) => {
       const store = useChatStore.getState();
-      // If we're streaming, finalize the text so far before showing the tool card
+      // Clear streaming text to avoid duplication — backend's finalize_streaming
+      // will create the text block. Calling finalizeStream here would cause a
+      // duplicate block because backend also sends finalize after tool execution.
       if (store.isStreaming && store.streamingText) {
-        store.finalizeStream(store.streamingText, /* isIntermediate */ true);
+        useChatStore.setState({ streamingText: "" });
       }
       store.addToolCall(params.tool, params.args);
     });
@@ -62,6 +64,16 @@ export function useBackend() {
 
     rpc.on("ready", (params: Record<string, unknown>) => {
       useConfigStore.getState().updateFromBackend(params);
+    });
+
+    rpc.on("input/request", (params: { commands?: string[]; root?: string }) => {
+      const config = useConfigStore.getState();
+      if (Array.isArray(params.commands)) {
+        config.setCommands(params.commands);
+      }
+      if (typeof params.root === "string") {
+        config.setWorkspaceRoot(params.root);
+      }
     });
 
     rpc.on("error", (params: { message: string }) => {

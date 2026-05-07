@@ -84,12 +84,12 @@ function WelcomeBanner() {
     <Box flexDirection="column">
       <Box>
         <Box flexDirection="column">
-          <Text color="claude">{" ▐▛███▜▌  "}</Text>
-          <Text color="claude">{"▝▜█████▛▘  "}</Text>
-          <Text color="claude">{"  ▘▘ ▝▝    "}</Text>
+          <Text color="claude">{"   ▄█▄    "}</Text>
+          <Text color="claude">{" ▄█████▄  "}</Text>
+          <Text color="claude">{"▀███████▀ "}</Text>
         </Box>
         <Box flexDirection="column" justifyContent="center">
-          <Text bold color="claude">{" AiCoder v0.6.0"}</Text>
+          <Text bold color="claude">{" 屎山生成器 v0.6.0"}</Text>
           <Text dimColor>{" " + model + " · AI Pair Programming"}</Text>
           <Text dimColor>{" " + process.cwd().replace(/\\/g, "/")}</Text>
         </Box>

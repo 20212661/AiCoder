@@ -31,6 +31,7 @@ class JsonRpcIO(InputOutput):
         self._input_queue: Queue = Queue()  # 持久化输入队列，防止消息丢失
         self._reader_thread: threading.Thread | None = None
         self._running = False
+        self._current_model_name = "unknown"
 
     def start(self):
         """启动后台 reader 线程"""
@@ -129,6 +130,16 @@ class JsonRpcIO(InputOutput):
             self._input_queue.put(f"/resume {session_id}")
             if msg_id:
                 self._send_response(msg_id, {"status": "ok"})
+            return
+
+        if method == "model/list":
+            from .models import list_model_names
+
+            if msg_id:
+                self._send_response(msg_id, {
+                    "models": list_model_names(),
+                    "currentModel": self._current_model_name,
+                })
             return
 
         if msg_id:
@@ -254,9 +265,11 @@ class JsonRpcIO(InputOutput):
     def serve(self, coder):
         """进入 RPC 服务主循环"""
         self.start()
+        self._current_model_name = coder.main_model.name if coder.main_model else "unknown"
         sys.stderr.write(f"[rpc] serve started, model={coder.main_model.name}\n"); sys.stderr.flush()
         self._notify("ready", {
-            "model": coder.main_model.name if coder.main_model else "unknown",
+            "model": self._current_model_name,
+            "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
         })
 
         try:
@@ -264,11 +277,12 @@ class JsonRpcIO(InputOutput):
 
             while self._running:
                 try:
+                    commands = coder.commands.get_commands() if coder.commands else []
                     user_input = self.get_input(
                         coder.root,
                         coder.get_inchat_relative_files(),
                         coder.get_addable_relative_files(),
-                        [],
+                        commands,
                         [],
                     )
                     if user_input is None:
@@ -288,11 +302,20 @@ class JsonRpcIO(InputOutput):
                     sys.stderr.write("[rpc] calling coder.run()\n"); sys.stderr.flush()
                     result = coder.run(with_message=user_input)
                     sys.stderr.write("[rpc] coder.run() done\n"); sys.stderr.flush()
+                    self._notify("status/update", {
+                        "model": coder.main_model.name if coder.main_model else "unknown",
+                        "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
+                    })
                     if isinstance(result, SwitchCoder):
                         kwargs = result.kwargs
                         kwargs["io"] = self
                         kwargs.setdefault("fnames", list(coder.abs_fnames))
                         coder = Coder.create(**kwargs)
+                        self._current_model_name = coder.main_model.name if coder.main_model else "unknown"
+                        self._notify("status/update", {
+                            "model": self._current_model_name,
+                            "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
+                        })
                         if hasattr(coder, '_approval') and hasattr(self, '_approval'):
                             pass
 

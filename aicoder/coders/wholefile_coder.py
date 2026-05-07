@@ -3,6 +3,7 @@ WholeFile Coder - 整体文件输出格式
 LLM 返回完整文件内容，Coder 负责解析并写入文件
 参考 Aider 的 wholefile_coder.py
 """
+import os
 from pathlib import Path
 
 from .base_coder import Coder
