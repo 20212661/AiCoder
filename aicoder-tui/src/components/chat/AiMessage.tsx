@@ -42,6 +42,12 @@ function BlockRenderer({ block }: { block: MessageBlock }) {
           <Text color="#ff6b6b">✗ {block.content}</Text>
         </Box>
       );
+    case "tool_output":
+      return (
+        <Box marginLeft={2} flexDirection="column">
+          <Text color="#888">{block.content}</Text>
+        </Box>
+      );
     default:
       return null;
   }

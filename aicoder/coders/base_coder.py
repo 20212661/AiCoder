@@ -352,7 +352,8 @@ class Coder:
 
     def _send_message_inner(self) -> None:
         import sys as _sys
-        for _ in range(MAX_TOOL_CALL_ROUNDS):
+        has_finalize = hasattr(self.io, "finalize_streaming")
+        for round_idx in range(MAX_TOOL_CALL_ROUNDS):
             _sys.stderr.write("[DBG] _trim_context\n"); _sys.stderr.flush()
             self._trim_context_for_model()
             _sys.stderr.write("[DBG] format_messages\n"); _sys.stderr.flush()
@@ -394,9 +395,15 @@ class Coder:
                 )
                 ac = self.partial_response_content
                 if ac: self.cur_messages.append(dict(role="assistant", content=ac))
+                # Final finalize
+                if has_finalize:
+                    self.io.finalize_streaming(self.partial_response_content)
                 break
             had = self._process_tool_calls()
             if had:
+                # Intermediate finalize: commit streamed text so far, keep same assistant message
+                if has_finalize:
+                    self.io.finalize_streaming(self.partial_response_content, is_intermediate=True)
                 from ..tools.parser import parse_xml_tools
                 from ..tools.result import TextBlock
                 blocks = parse_xml_tools(self.partial_response_content, self.tool_registry)
@@ -407,6 +414,9 @@ class Coder:
             else:
                 ac = self.partial_response_content
                 if ac: self.cur_messages.append(dict(role="assistant", content=ac))
+                # Final finalize: this is the last round, close the assistant message
+                if has_finalize:
+                    self.io.finalize_streaming(self.partial_response_content)
                 break
         # Run legacy edits once, after the tool-call loop finishes
         self._process_legacy_edits()
@@ -548,8 +558,10 @@ class Coder:
         except Exception as e:
             self.io.tool_error("Stream: " + str(e))
         self.partial_response_content = "".join(cc)
-        if hasattr(self.io, "finalize_streaming"):
-            self.io.finalize_streaming(self.partial_response_content)
+        # NOTE: do NOT call finalize_streaming here anymore.
+        # Finalization is now handled by the caller (_send_message_inner)
+        # so that intermediate tool-call rounds finalize as "intermediate"
+        # and the final round does a full finalize.
         self.multi_response_content = self.partial_response_content
 
     def process_response(self): pass

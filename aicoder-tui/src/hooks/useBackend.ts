@@ -29,8 +29,8 @@ export function useBackend() {
       store.appendStreamToken(params.text);
     });
 
-    rpc.on("stream/finalize", (params: { text: string }) => {
-      useChatStore.getState().finalizeStream(params.text);
+    rpc.on("stream/finalize", (params: { text: string; is_intermediate?: boolean }) => {
+      useChatStore.getState().finalizeStream(params.text, params.is_intermediate ?? false);
     });
 
     rpc.on("assistant/output", (params: { text: string }) => {
@@ -40,7 +40,12 @@ export function useBackend() {
     });
 
     rpc.on("tool/call_started", (params: { tool: string; args: Record<string, unknown> }) => {
-      useChatStore.getState().addToolCall(params.tool, params.args);
+      const store = useChatStore.getState();
+      // If we're streaming, finalize the text so far before showing the tool card
+      if (store.isStreaming && store.streamingText) {
+        store.finalizeStream(store.streamingText, /* isIntermediate */ true);
+      }
+      store.addToolCall(params.tool, params.args);
     });
 
     rpc.on("tool/call_finished", (params: { tool: string; result: string; success: boolean }) => {
@@ -71,11 +76,32 @@ export function useBackend() {
       useChatStore.getState().addErrorMessage(params.message);
     });
 
-    // Forward backend stderr to console for debugging
+    rpc.on("tool/output", (params: { message: string; bold?: boolean }) => {
+      // tool/output carries tool execution results — display as info in the current assistant message
+      const store = useChatStore.getState();
+      if (params.message) {
+        store.addToolOutput(params.message);
+      }
+    });
+
+    rpc.on("tool/warning", (params: { message: string }) => {
+      if (params.message) {
+        useChatStore.getState().addToolOutput(params.message);
+      }
+    });
+
+    // Forward backend stderr to console for debugging (don't show as chat errors)
     rpc.on("stderr", (data: string) => {
       const line = data.trim();
       if (line) {
-        useChatStore.getState().addErrorMessage("[backend] " + line);
+        // Only surface actual errors (✗ marker) to the user, not debug logs
+        if (line.includes("[rpc] recv:") || line.includes("[DBG]") || line.includes("[rpc] read_loop") || line.includes("[rpc] serve") || line.includes("[rpc] got input") || line.includes("[rpc] calling") || line.includes("[rpc] coder.run")) {
+          return; // suppress verbose debug output
+        }
+        // Only show real errors
+        if (line.startsWith("✗") || line.includes("CRASHED") || line.includes("ERROR")) {
+          useChatStore.getState().addErrorMessage(line);
+        }
       }
     });
 

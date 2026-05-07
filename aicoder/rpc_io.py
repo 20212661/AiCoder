@@ -228,8 +228,28 @@ class JsonRpcIO(InputOutput):
     def print_streaming(self, chunk):
         self._notify("stream/token", {"text": chunk})
 
-    def finalize_streaming(self, full_text):
-        self._notify("stream/finalize", {"text": full_text})
+    def finalize_streaming(self, full_text, is_intermediate=False):
+        self._notify("stream/finalize", {"text": full_text, "is_intermediate": is_intermediate})
+
+    def tool_call_started(self, tool_name: str, params: dict):
+        """通知 TUI 工具调用开始（结构化 IO）"""
+        self._notify("tool/call_started", {"tool": tool_name, "args": params})
+
+    def tool_call_finished(self, result, params: dict | None = None):
+        """通知 TUI 工具调用结束（结构化 IO）"""
+        from .tools.result import ToolResult
+        if isinstance(result, ToolResult):
+            self._notify("tool/call_finished", {
+                "tool": result.tool_name,
+                "result": result.output or result.error or "",
+                "success": result.success,
+            })
+        else:
+            self._notify("tool/call_finished", {
+                "tool": "",
+                "result": str(result),
+                "success": True,
+            })
 
     def serve(self, coder):
         """进入 RPC 服务主循环"""
