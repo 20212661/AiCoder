@@ -7,7 +7,7 @@ from ...coders.editblock_coder import do_replace, find_similar_lines, strip_quot
 
 class EditFileHandler(ToolHandler):
     name = "edit_file"
-    requires_approval = False
+    requires_approval = True
 
     def validate_params(self, tool_call: ToolCall) -> str:
         if not tool_call.get("path"):

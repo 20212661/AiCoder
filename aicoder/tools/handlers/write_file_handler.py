@@ -17,7 +17,7 @@ BINARY_EXTENSIONS = frozenset({
 
 class WriteFileHandler(ToolHandler):
     name = "write_file"
-    requires_approval = False
+    requires_approval = True
 
     def validate_params(self, tool_call: ToolCall) -> str:
         if not tool_call.get("path"):
