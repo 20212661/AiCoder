@@ -241,6 +241,12 @@ class JsonRpcIO(InputOutput):
         result = self._wait_response(approval_id)
         return bool(result)
 
+    def request_structured_approval(self, kind, description, preview=""):
+        """Tool executor 调用的审批接口 — 走 approval_request 通道"""
+        return self.approval_request(description, diff=preview)
+        result = self._wait_response(approval_id)
+        return bool(result)
+
     def print_assistant_output(self, text):
         self._notify("assistant/output", {"text": text})
 
