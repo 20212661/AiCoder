@@ -38,6 +38,8 @@ def build_system_messages(coder: "Coder") -> list[dict[str, Any]]:
 def format_messages(coder: "Coder") -> list[dict[str, Any]]:
     """Assemble the full message list sent to the LLM."""
     messages = list(build_system_messages(coder))
+    messages.extend(build_runtime_state_messages(coder))
+    messages.extend(build_mode_messages(coder))
     messages.extend(coder.done_messages)
     repo_map = coder.get_repo_map()
     if repo_map:
@@ -45,6 +47,41 @@ def format_messages(coder: "Coder") -> list[dict[str, Any]]:
     messages.extend(build_chat_files_messages(coder))
     messages.extend(coder.cur_messages)
     return messages
+
+
+def build_runtime_state_messages(coder: "Coder") -> list[dict[str, Any]]:
+    """Attach the exact live model/mode state so meta questions answer reliably."""
+    current_model = coder.main_model.name if coder.main_model else "unknown"
+    current_mode = "plan" if coder.tool_exec_state.is_plan_mode else "act"
+    return [
+        dict(
+            role="system",
+            content=(
+                "CURRENT RUNTIME STATE:\n"
+                f"- Current model: {current_model}\n"
+                f"- Current mode: {current_mode}\n"
+                "If the user asks what model or mode is currently active, answer using these exact values."
+            ),
+        )
+    ]
+
+
+def build_mode_messages(coder: "Coder") -> list[dict[str, Any]]:
+    if not coder.tool_exec_state.is_plan_mode:
+        return []
+
+    return [
+        dict(
+            role="system",
+            content=(
+                "PLAN MODE ATTACHMENT:\n"
+                "You are currently in read-only planning mode.\n"
+                "- Explore with read_file, search_files, list_files, list_code_defs, and read-only run_shell.\n"
+                "- Do not attempt file edits or mutating shell commands.\n"
+                "- End with a concise plan, key findings, and a clear next step to switch to /act."
+            ),
+        )
+    ]
 
 
 def build_chat_files_messages(coder: "Coder") -> list[dict[str, Any]]:

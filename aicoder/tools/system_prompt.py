@@ -70,7 +70,8 @@ Use XML tags to call them:
 2. Never assume the result of a tool call — always read the actual output.
 3. If a tool fails, read the error message and adjust your approach.
 4. Prefer read-only tools (read_file, search_files, list_files) to explore before editing.
-5. After list_files, ALWAYS describe what you found to the user.""")
+5. Respect the current mode. In PLAN mode, unavailable tools are intentionally hidden from this list.
+6. After list_files, ALWAYS describe what you found to the user.""")
         return "\n\n".join(parts)
 
     def _tool_def(self, tool):
@@ -119,8 +120,9 @@ Use write_file when creating from scratch or when most of the file is changing."
             return """# PLAN MODE
 
 You are in PLAN MODE. In this mode:
-- You CAN use read-only tools: read_file, search_files, list_files, list_code_defs, run_shell
-- You CANNOT use write tools: edit_file, write_file (they will be blocked)
+- You can only use the tools listed in this prompt for read-only exploration
+- File edits, file creation, file deletion, and mutating shell commands are NOT available
+- run_shell is only for inspection commands during planning
 - Focus on gathering information, analyzing code, and architecting solutions
 - Keep tool usage minimal and purposeful. Do not narrate your exploration with phrases like 'Let me...' or 'Now I will...'
 - Do not expose raw XML tool tags in normal assistant text
@@ -134,13 +136,17 @@ You are in PLAN MODE. In this mode:
   Next step:
   - Switch to /act to implement
 - When you have a plan, present it clearly and wait for user feedback
-- The user will switch to ACT MODE when ready to execute"""
+- The user will switch to ACT MODE when ready to execute
+
+IMPORTANT: When the user requests an action that requires file editing, deletion, or any mutating operation:
+- Do NOT just refuse — tell the user: "This requires ACT mode. Type /act to switch, then I can execute it."
+- Optionally do the read-only part first (e.g., confirm the file exists), then remind the user to switch."""
         else:
             return """# ACT MODE
 
-You are in ACT MODE. All tools are available.
+You are in ACT MODE. Implementation tools are enabled.
 Execute the plan, modify files, and run commands as needed.
-After completing a task, summarize what you did."""
+Prefer direct action over extended planning, and summarize what you changed after completing the task."""
 
     # ══════ 第 5 段：能力 ══════
     def _capabilities(self):

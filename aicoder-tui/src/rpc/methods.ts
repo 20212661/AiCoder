@@ -40,6 +40,10 @@ export function createBackendApi(rpc: RpcClient) {
     newSession() {
       return rpc.request("session/new");
     },
+
+    switchModel(model: string) {
+      return rpc.request("model/switch", { model });
+    },
   };
 }
 

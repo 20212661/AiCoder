@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 export interface AppConfig {
   model: string;
+  mode: "plan" | "act";
   theme: string;
   showSidebar: boolean;
   showThinking: boolean;
@@ -10,10 +11,13 @@ export interface AppConfig {
   commands: string[];
   availableModels: string[];
   workspaceRoot?: string;
+  phase: string;
 }
 
 interface ConfigState extends AppConfig {
   setModel: (model: string) => void;
+  setMode: (mode: "plan" | "act") => void;
+  setPlanMode: (planMode: boolean) => void;
   setTheme: (theme: string) => void;
   toggleSidebar: () => void;
   toggleThinking: () => void;
@@ -27,6 +31,8 @@ interface ConfigState extends AppConfig {
 
 export const useConfigStore = create<ConfigState>((set) => ({
   model: "unknown",
+  mode: "act",
+  phase: "idle",
   theme: "dark",
   showSidebar: false,
   showThinking: false,
@@ -38,6 +44,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
   setModel(model) {
     set({ model });
   },
+  setMode(mode) {
+    set({ mode, planMode: mode === "plan" });
+  },
+  setPlanMode(planMode) {
+    set({ planMode, mode: planMode ? "plan" : "act" });
+  },
   setTheme(theme) {
     set({ theme });
   },
@@ -48,7 +60,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set((s) => ({ showThinking: !s.showThinking }));
   },
   togglePlanMode() {
-    set((s) => ({ planMode: !s.planMode }));
+    set((s) => ({ planMode: !s.planMode, mode: !s.planMode ? "plan" : "act" }));
   },
   toggleYolo() {
     set((s) => ({ yolo: !s.yolo }));
@@ -65,7 +77,13 @@ export const useConfigStore = create<ConfigState>((set) => ({
   updateFromBackend(params) {
     const updates: Partial<AppConfig> = {};
     if (params.model && typeof params.model === "string") updates.model = params.model;
+    if (params.mode === "plan" || params.mode === "act") updates.mode = params.mode;
     if (typeof params.planMode === "boolean") updates.planMode = params.planMode;
+    if (!updates.mode && typeof params.planMode === "boolean") {
+      updates.mode = params.planMode ? "plan" : "act";
+    }
+    if (typeof params.yolo === "boolean") updates.yolo = params.yolo;
+    if (typeof params.phase === "string") updates.phase = params.phase;
     set(updates);
   },
 }));

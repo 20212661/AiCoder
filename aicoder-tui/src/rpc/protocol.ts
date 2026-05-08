@@ -43,7 +43,15 @@ export interface BackendNotifications {
     inchat_files?: string[];
     addable_files?: string[];
   };
-  "status/update": { model?: string; tokens?: number; cost?: number; planMode?: boolean };
+  "status/update": {
+    model?: string;
+    tokens?: number;
+    cost?: number;
+    planMode?: boolean;
+    mode?: "plan" | "act";
+    yolo?: boolean;
+    phase?: string;
+  };
 }
 
 // TUI → Backend requests

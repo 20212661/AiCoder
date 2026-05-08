@@ -242,13 +242,17 @@ class Commands:
         """切换到 Plan 模式（只读探索）"""
         self.coder.tool_executor.set_mode("plan")
         self.coder._update_tool_model_info()
-        self.io.tool_output("Switched to PLAN MODE. Read-only tools enabled.")
+        self.io.tool_output(
+            "Switched to PLAN MODE. Only read-only tools and inspection shell commands are enabled."
+        )
 
     def cmd_act(self, args: str) -> None:
         """切换到 Act 模式（全部工具可用）"""
         self.coder.tool_executor.set_mode("act")
         self.coder._update_tool_model_info()
-        self.io.tool_output("Switched to ACT MODE. All tools enabled.")
+        self.io.tool_output(
+            "Switched to ACT MODE. Implementation tools and routine shell actions are enabled."
+        )
 
     def cmd_undo(self, args: str) -> Optional[str]:
         """撤销上次 AI 提交"""

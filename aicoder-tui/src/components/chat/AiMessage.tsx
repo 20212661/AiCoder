@@ -1,6 +1,8 @@
 import { Box, Text } from "../../ink/index.js";
 import type { ChatMessage, MessageBlock } from "../../stores/chatStore.js";
-import { TextBlock } from "./TextBlock.js";
+import { useConfigStore } from "../../stores/configStore.js";
+import { PlanBlock, looksLikePlanContent } from "./PlanBlock.js";
+import { TextBlock, sanitizeText } from "./TextBlock.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { CodeBlock } from "./CodeBlock.js";
 import { ToolCallCard } from "../tools/ToolCallCard.js";
@@ -20,9 +22,16 @@ export function AiMessage({ message }: Props) {
 }
 
 function BlockRenderer({ block }: { block: MessageBlock }) {
+  const planMode = useConfigStore((s) => s.planMode);
+
   switch (block.type) {
-    case "text":
+    case "text": {
+      const sanitized = sanitizeText(block.content, planMode);
+      if (planMode && looksLikePlanContent(sanitized)) {
+        return <PlanBlock content={sanitized} />;
+      }
       return <TextBlock content={block.content} />;
+    }
     case "thinking":
       return <ThinkingBlock content={block.content} />;
     case "code":

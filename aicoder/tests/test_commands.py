@@ -209,6 +209,26 @@ class TestCmdModel:
             cmds.cmd_model("deepseek-chat")
 
 
+class TestCmdModes:
+    def test_plan_sets_plan_mode(self, cmds, mock_coder_cmds):
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds._update_tool_model_info = MagicMock()
+
+        cmds.cmd_plan("")
+
+        mock_coder_cmds.tool_executor.set_mode.assert_called_once_with("plan")
+        assert any("inspection shell commands" in o for o in mock_coder_cmds.io.outputs)
+
+    def test_act_sets_act_mode(self, cmds, mock_coder_cmds):
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds._update_tool_model_info = MagicMock()
+
+        cmds.cmd_act("")
+
+        mock_coder_cmds.tool_executor.set_mode.assert_called_once_with("act")
+        assert any("routine shell actions" in o for o in mock_coder_cmds.io.outputs)
+
+
 class TestCmdRun:
     def test_run_echo(self, cmds, mock_coder_cmds):
         cmds.cmd_run("python -c \"print('hello')\"")

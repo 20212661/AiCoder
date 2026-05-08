@@ -6,6 +6,7 @@ from ..models import Model, DEFAULT_MODEL_NAME
 from ..exceptions import LLMError
 from .base_prompts import CoderPrompts
 from ..commands import Commands, SwitchCoder
+from ..permission_modes import get_visible_tool_specs
 
 all_fences = [("```", "```"), ("````", "````"), ("<source>", "</source>"), ("<code>", "</code>")]
 
@@ -129,7 +130,10 @@ class Coder:
         else:
             ai_identity = getattr(self.gpt_prompts, "ai_identity", "")
         self._system_prompt.configure(
-            tools=self.tool_registry.get_all(),
+            tools=get_visible_tool_specs(
+                self.tool_registry.get_all(),
+                "plan" if self.tool_exec_state.is_plan_mode else "act",
+            ),
             cwd=self.root.replace("\\", "/"),
             os_name=platform.system(),
             model_list=model_names,
@@ -272,19 +276,9 @@ class Coder:
 
     def format_messages(self) -> list[dict[str, Any]]:
         import sys as _sys
-        from .message_builder import format_messages, build_system_messages, build_chat_files_messages
-        _sys.stderr.write("[DBG]   build_system_messages\n"); _sys.stderr.flush()
-        msgs = list(build_system_messages(self))
-        msgs.extend(self.done_messages)
-        _sys.stderr.write("[DBG]   get_repo_map\n"); _sys.stderr.flush()
-        repo_map = self.get_repo_map()
-        _sys.stderr.write(f"[DBG]   repo_map={bool(repo_map)}\n"); _sys.stderr.flush()
-        if repo_map:
-            msgs += [dict(role="user", content=repo_map), dict(role="assistant", content="Ok.")]
-        _sys.stderr.write("[DBG]   build_chat_files\n"); _sys.stderr.flush()
-        msgs.extend(build_chat_files_messages(self))
-        msgs.extend(self.cur_messages)
-        return msgs
+        from .message_builder import format_messages
+        _sys.stderr.write("[DBG]   format_messages(builder)\n"); _sys.stderr.flush()
+        return format_messages(self)
 
     def get_chat_files_messages(self) -> list[dict[str, Any]]:
         from .message_builder import build_chat_files_messages
@@ -297,6 +291,9 @@ class Coder:
         return None
 
     def run(self, with_message: str | None = None) -> str | None:
+        if os.environ.get("AICODER_LANGGRAPH_RUNTIME") == "1":
+            from ..agent_runtime import AgentRuntime
+            return AgentRuntime(self).run_user_turn(with_message)
         self.show_announcements()
         try:
             if with_message: self.run_one(with_message); return self.partial_response_content

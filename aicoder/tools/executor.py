@@ -1,33 +1,38 @@
-"""Tool executor with plan/act mode, timeout, retry, and resource limits"""
+"""Tool executor with mode-aware permissions, timeout, retry, and limits."""
+from __future__ import annotations
+
 import threading
 import time
-from functools import wraps
-from .result import ToolCall, ToolResult, ExecutionState
+
+from ..permission_modes import (
+    FILE_EDIT_TOOLS,
+    ToolPermissionContext,
+    can_use_tool_in_mode,
+)
 from .handlers.base import ToolHandler
+from .result import ExecutionState, ToolCall, ToolResult
 
-PLAN_MODE_BLOCKED_TOOLS = {"edit_file", "write_file"}
-FILE_EDIT_TOOLS = {"edit_file", "write_file"}
+DEFAULT_TOOL_TIMEOUT = 60
+MAX_TOOL_TIMEOUT = 600
+MAX_WRITE_BYTES = 2 * 1024 * 1024
+MAX_WRITE_LINES = 10000
 
-# ── 执行策略常量 ──
-DEFAULT_TOOL_TIMEOUT = 60       # 普通工具超时 60s
-MAX_TOOL_TIMEOUT = 600          # 工具最大超时 600s
-MAX_WRITE_BYTES = 2 * 1024 * 1024  # 写文件上限 2MB
-MAX_WRITE_LINES = 10000         # 写文件行数上限
-
-# ── 重试策略 ──
-MAX_RETRIES = 2                 # 最大重试次数（不含首次）
-RETRY_BASE_DELAY = 1.0          # 指数退避基础延迟（秒）
-RETRY_MAX_DELAY = 10.0          # 最大退避延迟（秒）
+MAX_RETRIES = 2
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 10.0
 RETRYABLE_ERRORS = {
-    "timeout", "subprocess.TimeoutExpired", "ConnectionError",
-    "ConnectionResetError", "BrokenPipeError", "OSError",
+    "timeout",
+    "subprocess.timeoutexpired",
+    "connectionerror",
+    "connectionreseterror",
+    "brokenpipeerror",
+    "oserror",
 }
 
 
 def _is_retryable_error(error_msg: str) -> bool:
-    """判断错误是否值得重试"""
     lower = error_msg.lower()
-    return any(kw in lower for kw in RETRYABLE_ERRORS)
+    return any(keyword in lower for keyword in RETRYABLE_ERRORS)
 
 
 class ToolCoordinator:
@@ -42,14 +47,10 @@ class ToolCoordinator:
 
 
 class _TimeoutWrapper:
-    """为任意可调用对象添加超时强制终止能力。
-
-    使用 threading 实现跨平台兼容（signal.alarm 仅限 Unix）。
-    """
+    """Run a handler in a thread so timeouts work cross-platform."""
 
     def __init__(self, timeout: float):
         self.timeout = timeout
-        self._timer: threading.Timer | None = None
         self._timed_out = False
 
     def run(self, fn, *args, **kwargs):
@@ -60,8 +61,8 @@ class _TimeoutWrapper:
         def target():
             try:
                 result_holder[0] = fn(*args, **kwargs)
-            except Exception as e:
-                error_holder[0] = e
+            except Exception as exc:  # pragma: no cover - defensive guard
+                error_holder[0] = exc
 
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
@@ -84,7 +85,12 @@ class _TimeoutWrapper:
 
 
 class ToolExecutor:
-    def __init__(self, coordinator: ToolCoordinator, coder, state: ExecutionState | None = None):
+    def __init__(
+        self,
+        coordinator: ToolCoordinator,
+        coder,
+        state: ExecutionState | None = None,
+    ):
         self._coordinator = coordinator
         self._coder = coder
         self._state = state or ExecutionState()
@@ -93,25 +99,21 @@ class ToolExecutor:
     def state(self) -> ExecutionState:
         return self._state
 
-    def execute(self, tool_call: ToolCall) -> ToolResult:
+    def execute(self, tool_call: ToolCall, skip_permission: bool = False) -> ToolResult:
         if self._state.did_reject_tool:
-            return ToolResult.fail(tool_call.name, "Skipped: previous tool was rejected")
+            return ToolResult.fail(
+                tool_call.name,
+                "Skipped: previous tool was rejected",
+            )
 
         handler = self._coordinator.get(tool_call.name)
         if not handler:
             self._state.on_failure(tool_call.name, tool_call.params)
-            return ToolResult.fail(tool_call.name, "Unknown tool: " + tool_call.name)
-
-        # 计划模式：拦截写操作工具
-        if self._state.is_plan_mode and tool_call.name in PLAN_MODE_BLOCKED_TOOLS:
-            return ToolResult.blocked(
+            return ToolResult.fail(
                 tool_call.name,
-                "BLOCKED in PLAN MODE. You are in plan/read-only mode. "
-                "Use read_file, search_files, list_files, or list_code_defs to explore. "
-                "When ready, the user will switch to ACT MODE for file editing."
+                "Unknown tool: " + tool_call.name,
             )
 
-        # 资源预检：写操作大小限制
         if tool_call.name in FILE_EDIT_TOOLS:
             check = self._check_write_limits(tool_call)
             if check:
@@ -122,25 +124,42 @@ class ToolExecutor:
             self._state.on_failure(tool_call.name, tool_call.params)
             return ToolResult.fail(tool_call.name, "Invalid params: " + error)
 
-        if handler.requires_approval and not self._can_auto_approve(tool_call, handler):
-            approved = self._request_approval(tool_call, handler)
-            if not approved:
-                self._state.did_reject_tool = True
-                self._state.consecutive_mistake_count += 1
-                return ToolResult.create_rejected(tool_call.name)
+        if not skip_permission:
+            permission = self._get_permission_decision(tool_call, handler)
+            if permission.behavior == "deny":
+                self._state.on_failure(tool_call.name, tool_call.params)
+                return ToolResult.blocked(tool_call.name, permission.reason)
+
+            if permission.behavior == "ask" and handler.requires_approval:
+                approved = self._request_approval(tool_call, handler, permission.reason)
+                if not approved:
+                    self._state.did_reject_tool = True
+                    self._state.consecutive_mistake_count += 1
+                    return ToolResult.create_rejected(tool_call.name)
+
+            if permission.behavior == "allow" and permission.reason:
+                self._emit_mode_reason(permission.reason)
 
         if self._state.is_looping:
-            return ToolResult.fail(tool_call.name,
-                "Loop detected: same tool called " + str(self._state.repeated_call_count) + " times")
+            return ToolResult.fail(
+                tool_call.name,
+                "Loop detected: same tool called "
+                + str(self._state.repeated_call_count)
+                + " times",
+            )
 
-        # ── 带超时和重试的执行 ──
-        result = self._execute_with_retry(tool_call, handler)
-        return result
+        return self._execute_with_retry(tool_call, handler)
 
-    def _execute_with_retry(self, tool_call: ToolCall, handler: ToolHandler) -> ToolResult:
-        """带超时和指数退避重试的工具执行"""
+    def _execute_with_retry(
+        self,
+        tool_call: ToolCall,
+        handler: ToolHandler,
+    ) -> ToolResult:
         timeout = self._resolve_timeout(tool_call, handler)
-        structured_io = hasattr(self._coder.io, "tool_call_started") and hasattr(self._coder.io, "tool_call_finished")
+        structured_io = hasattr(self._coder.io, "tool_call_started") and hasattr(
+            self._coder.io,
+            "tool_call_finished",
+        )
 
         if structured_io:
             self._coder.io.tool_call_started(tool_call.name, tool_call.params)
@@ -158,7 +177,6 @@ class ToolExecutor:
                     )
                 time.sleep(delay)
 
-            # 带超时包装执行
             wrapper = _TimeoutWrapper(timeout)
             result, err = wrapper.run(handler.execute, tool_call, self._coder)
 
@@ -172,16 +190,18 @@ class ToolExecutor:
                     if _is_retryable_error(msg):
                         continue
                     break
-                last_result = ToolResult.fail(tool_call.name, f"Execution error: {err}")
+
+                last_result = ToolResult.fail(
+                    tool_call.name,
+                    f"Execution error: {err}",
+                )
                 if _is_retryable_error(str(err)):
                     continue
                 break
 
             last_result = result
-            # 成功或非重试错误 → 退出循环
             if result.success or not _is_retryable_error(result.error or ""):
                 break
-            # 可重试失败 → 继续
 
         result = last_result
 
@@ -204,13 +224,19 @@ class ToolExecutor:
                         self._coder.io.tool_output("  " + line)
             else:
                 self._state.on_failure(tool_call.name, tool_call.params)
-                self._coder.io.tool_error(result.error[:200] if result.error else "Tool failed")
+                self._coder.io.tool_error(
+                    result.error[:200] if result.error else "Tool failed"
+                )
             if result.success and tool_call.name in FILE_EDIT_TOOLS:
                 self._state.had_file_edits = True
 
         return result
 
-    def _format_result_for_ui(self, tool_call: ToolCall, result: ToolResult) -> ToolResult:
+    def _format_result_for_ui(
+        self,
+        tool_call: ToolCall,
+        result: ToolResult,
+    ) -> ToolResult:
         if not self._state.is_plan_mode:
             return result
 
@@ -230,7 +256,11 @@ class ToolExecutor:
         first = lines[0] if lines else "Completed."
 
         if tool_name == "list_files":
-            entry_count = max(0, len(lines) - 1) if lines and lines[0].lower().startswith("contents of") else len(lines)
+            entry_count = (
+                max(0, len(lines) - 1)
+                if lines and lines[0].lower().startswith("contents of")
+                else len(lines)
+            )
             return f"Scanned directory contents ({entry_count} lines)."
 
         if tool_name == "read_file":
@@ -251,12 +281,10 @@ class ToolExecutor:
         return first[:160]
 
     def _resolve_timeout(self, tool_call: ToolCall, handler: ToolHandler) -> float:
-        """解析工具超时时间：优先 tool_call 参数 > handler 属性 > 默认值"""
         timeout_str = tool_call.get("timeout", "")
         if timeout_str:
             try:
-                t = float(timeout_str)
-                return min(t, MAX_TOOL_TIMEOUT)
+                return min(float(timeout_str), MAX_TOOL_TIMEOUT)
             except ValueError:
                 pass
         if hasattr(handler, "default_timeout"):
@@ -264,7 +292,6 @@ class ToolExecutor:
         return DEFAULT_TOOL_TIMEOUT
 
     def _check_write_limits(self, tool_call: ToolCall) -> ToolResult | None:
-        """写操作资源预检：文件大小、行数"""
         content = tool_call.get("content", "")
         if not content:
             return None
@@ -274,7 +301,7 @@ class ToolExecutor:
             return ToolResult.fail(
                 tool_call.name,
                 f"File too large: {content_bytes} bytes exceeds the {MAX_WRITE_BYTES} byte limit. "
-                "Break the file into smaller writes or use edit_file for targeted changes."
+                "Break the file into smaller writes or use edit_file for targeted changes.",
             )
 
         line_count = content.count("\n") + 1
@@ -282,7 +309,7 @@ class ToolExecutor:
             return ToolResult.fail(
                 tool_call.name,
                 f"File too large: {line_count} lines exceeds the {MAX_WRITE_LINES} line limit. "
-                "Break the file into smaller writes or use edit_file for targeted changes."
+                "Break the file into smaller writes or use edit_file for targeted changes.",
             )
         return None
 
@@ -293,36 +320,60 @@ class ToolExecutor:
             results.append(result)
             self._coder.cur_messages.append(result.to_message())
             if self._state.did_reject_tool:
-                self._coder.io.tool_warning("REJECTED — skipping remaining tools")
+                self._coder.io.tool_warning("REJECTED - skipping remaining tools")
                 break
             if self._state.too_many_errors:
-                self._coder.io.tool_warning("ERROR LIMIT — stopping")
+                self._coder.io.tool_warning("ERROR LIMIT - stopping")
                 break
         return results
 
-    def _can_auto_approve(self, tool_call, handler):
-        if not handler.requires_approval:
-            return True
+    def _get_permission_decision(self, tool_call: ToolCall, handler: ToolHandler):
         coder = self._coder
-        if hasattr(coder, "_approval") and coder._approval is not None:
-            ok, reason = coder._approval.should_auto_approve(
-                tool_call.name, tool_call.params
-            )
-            if ok:
-                if hasattr(coder.io, "tool_output"):
-                    coder.io.tool_output(f"  [auto] {reason}")
-                return True
-        if self._state.should_require_approval:
-            return False
-        return False
+        approval = getattr(coder, "_approval", None)
+        mode_result = can_use_tool_in_mode(
+            tool_call.name,
+            tool_call.params,
+            ToolPermissionContext(mode=self._state.mode),
+            approval,
+        )
+        if mode_result.behavior != "ask":
+            return mode_result
 
-    def _request_approval(self, tool_call, handler):
-        desc = handler.description(tool_call) if hasattr(handler, "description") else tool_call.name
+        if not handler.requires_approval:
+            return mode_result
+
+        if approval is not None:
+            ok, reason = approval.should_auto_approve(tool_call.name, tool_call.params)
+            if ok:
+                return type(mode_result)(behavior="allow", reason=reason)
+            if reason:
+                return type(mode_result)(behavior="ask", reason=reason)
+
+        if self._state.should_require_approval:
+            return type(mode_result)(
+                behavior="ask",
+                reason="recent tool failures increased approval strictness",
+            )
+
+        return mode_result
+
+    def _request_approval(self, tool_call, handler, reason_override=""):
+        desc = (
+            handler.description(tool_call)
+            if hasattr(handler, "description")
+            else tool_call.name
+        )
         params_preview = str(tool_call.params)[:200]
         coder = self._coder
-        reason = ""
+        reason = reason_override or ""
         if hasattr(coder, "_approval") and coder._approval is not None:
-            _, reason = coder._approval.should_auto_approve(tool_call.name, tool_call.params)
+            _, auto_reason = coder._approval.should_auto_approve(
+                tool_call.name,
+                tool_call.params,
+            )
+            if auto_reason:
+                reason = auto_reason
+
         full_desc = desc
         if reason:
             full_desc = f"{desc}\n  Reason: {reason}"
@@ -333,7 +384,13 @@ class ToolExecutor:
                 full_desc,
                 params_preview,
             )
-        return self._coder.io.confirm_ask("Allow tool call?\n  " + full_desc + "\n  " + params_preview)
+        return self._coder.io.confirm_ask(
+            "Allow tool call?\n  " + full_desc + "\n  " + params_preview
+        )
+
+    def _emit_mode_reason(self, reason: str) -> None:
+        if hasattr(self._coder.io, "tool_output"):
+            self._coder.io.tool_output(f"  [mode] {reason}")
 
     def reset_state(self):
         self._state.reset()

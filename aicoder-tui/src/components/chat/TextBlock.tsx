@@ -19,7 +19,7 @@ export function TextBlock({ content }: Props) {
   );
 }
 
-function sanitizeText(content: string, planMode: boolean): string {
+export function sanitizeText(content: string, planMode: boolean): string {
   if (!planMode) return content;
 
   const filtered = content

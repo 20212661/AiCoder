@@ -142,6 +142,14 @@ class JsonRpcIO(InputOutput):
                 })
             return
 
+        if method == "model/switch":
+            model_name = params.get("model", "")
+            if model_name:
+                self._input_queue.put(f"/model {model_name}")
+            if msg_id:
+                self._send_response(msg_id, {"status": "ok"})
+            return
+
         if msg_id:
             self._send_response(msg_id, None, error={
                 "code": -32601,
@@ -262,15 +270,22 @@ class JsonRpcIO(InputOutput):
                 "success": True,
             })
 
+    def _build_status(self, coder, phase="idle") -> dict:
+        """构建统一的状态广播 payload（model / mode / planMode / yolo / phase）"""
+        return {
+            "model": coder.main_model.name if coder.main_model else "unknown",
+            "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
+            "mode": getattr(coder.tool_executor.state, "mode", "act"),
+            "yolo": bool(getattr(coder, "_approval", None) and coder._approval.settings.yolo),
+            "phase": phase,
+        }
+
     def serve(self, coder):
         """进入 RPC 服务主循环"""
         self.start()
         self._current_model_name = coder.main_model.name if coder.main_model else "unknown"
         sys.stderr.write(f"[rpc] serve started, model={coder.main_model.name}\n"); sys.stderr.flush()
-        self._notify("ready", {
-            "model": self._current_model_name,
-            "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
-        })
+        self._notify("ready", self._build_status(coder))
 
         try:
             from .commands import SwitchCoder
@@ -298,26 +313,37 @@ class JsonRpcIO(InputOutput):
                             coder.done_messages = []
                             coder.cur_messages = []
                             continue
+                        # 交给命令系统分发（如 /plan, /act, /model 等）
+                        if coder.commands and coder.commands.is_command(user_input):
+                            # 创建 assistant message 容器，让 tool_output 有地方附着
+                            self._notify("stream/token", {"text": ""})
+                            try:
+                                cmd_result = coder.commands.run(user_input)
+                            except SwitchCoder as e:
+                                cmd_result = e
+                            finally:
+                                self._notify("stream/finalize", {"text": ""})
+                            if isinstance(cmd_result, SwitchCoder):
+                                kwargs = cmd_result.kwargs
+                                kwargs["io"] = self
+                                kwargs.setdefault("fnames", list(coder.abs_fnames))
+                                coder = Coder.create(**kwargs)
+                                self._current_model_name = coder.main_model.name if coder.main_model else "unknown"
+                            self._notify("status/update", self._build_status(coder))
+                            continue
 
                     sys.stderr.write("[rpc] calling coder.run()\n"); sys.stderr.flush()
+                    thinking_phase = "planning" if coder.tool_exec_state.is_plan_mode else "acting"
+                    self._notify("status/update", self._build_status(coder, thinking_phase))
                     result = coder.run(with_message=user_input)
                     sys.stderr.write("[rpc] coder.run() done\n"); sys.stderr.flush()
-                    self._notify("status/update", {
-                        "model": coder.main_model.name if coder.main_model else "unknown",
-                        "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
-                    })
                     if isinstance(result, SwitchCoder):
                         kwargs = result.kwargs
                         kwargs["io"] = self
                         kwargs.setdefault("fnames", list(coder.abs_fnames))
                         coder = Coder.create(**kwargs)
                         self._current_model_name = coder.main_model.name if coder.main_model else "unknown"
-                        self._notify("status/update", {
-                            "model": self._current_model_name,
-                            "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
-                        })
-                        if hasattr(coder, '_approval') and hasattr(self, '_approval'):
-                            pass
+                    self._notify("status/update", self._build_status(coder, "idle"))
 
                 except KeyboardInterrupt:
                     break
