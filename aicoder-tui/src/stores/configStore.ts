@@ -77,7 +77,10 @@ export const useConfigStore = create<ConfigState>((set) => ({
   updateFromBackend(params) {
     const updates: Partial<AppConfig> = {};
     if (params.model && typeof params.model === "string") updates.model = params.model;
-    if (params.mode === "plan" || params.mode === "act") updates.mode = params.mode;
+    if (params.mode === "plan" || params.mode === "act") {
+      updates.mode = params.mode;
+      updates.planMode = params.mode === "plan";
+    }
     if (typeof params.planMode === "boolean") updates.planMode = params.planMode;
     if (!updates.mode && typeof params.planMode === "boolean") {
       updates.mode = params.planMode ? "plan" : "act";

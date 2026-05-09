@@ -244,8 +244,6 @@ class JsonRpcIO(InputOutput):
     def request_structured_approval(self, kind, description, preview=""):
         """Tool executor 调用的审批接口 — 走 approval_request 通道"""
         return self.approval_request(description, diff=preview)
-        result = self._wait_response(approval_id)
-        return bool(result)
 
     def print_assistant_output(self, text):
         self._notify("assistant/output", {"text": text})
@@ -295,6 +293,7 @@ class JsonRpcIO(InputOutput):
 
         try:
             from .commands import SwitchCoder
+            from .coders.base_coder import Coder
 
             while self._running:
                 try:
@@ -339,7 +338,7 @@ class JsonRpcIO(InputOutput):
                             continue
 
                     sys.stderr.write("[rpc] calling coder.run()\n"); sys.stderr.flush()
-                    thinking_phase = "planning" if coder.tool_exec_state.is_plan_mode else "acting"
+                    thinking_phase = "planning" if getattr(getattr(coder, "tool_exec_state", None), "is_plan_mode", False) else "acting"
                     self._notify("status/update", self._build_status(coder, thinking_phase))
                     result = coder.run(with_message=user_input)
                     sys.stderr.write("[rpc] coder.run() done\n"); sys.stderr.flush()

@@ -41,6 +41,11 @@ export class RpcClient extends EventEmitter {
     const msg: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
 
     return new Promise<T>((resolve, reject) => {
+      if (!this.connected) {
+        reject(new Error("Cannot send: transport disconnected"));
+        return;
+      }
+
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`RPC timeout after ${timeout}ms: ${method}`));
@@ -57,6 +62,7 @@ export class RpcClient extends EventEmitter {
   }
 
   notify(method: string, params?: unknown): void {
+    if (!this.connected) return;
     const msg: JsonRpcNotification = { jsonrpc: "2.0", method, params };
     this.transport.send(JSON.stringify(msg));
   }

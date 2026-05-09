@@ -292,8 +292,9 @@ class Coder:
 
     def run(self, with_message: str | None = None) -> str | None:
         if os.environ.get("AICODER_LANGGRAPH_RUNTIME") == "1":
-            from ..agent_runtime import AgentRuntime
-            return AgentRuntime(self).run_user_turn(with_message)
+            from ..agent_runtime import _create_runtime
+            runtime = _create_runtime(self)
+            return runtime.run_user_turn(with_message)
         self.show_announcements()
         try:
             if with_message: self.run_one(with_message); return self.partial_response_content

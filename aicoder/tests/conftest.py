@@ -295,9 +295,13 @@ def invoke_graph(coder, user_input: str, mode: str = "act", *, max_loops: int = 
     """Build and invoke the graph with the given coder and patched message builder."""
     from aicoder.graph.workflow import build_agent_graph
 
+    from aicoder.graph.state import register_coder
+
     graph = build_agent_graph()
+    session_id = coder.session_id or "test"
+    register_coder(session_id, coder)
     state: dict = {
-        "session_id": coder.session_id,
+        "session_id": session_id,
         "user_input": user_input,
         "messages": [],
         "mode": mode,
@@ -307,7 +311,6 @@ def invoke_graph(coder, user_input: str, mode: str = "act", *, max_loops: int = 
         "tool_observations": [],
         "loop_count": 0,
         "max_loops": max_loops,
-        "_coder": coder,
     }
     with patch("aicoder.coders.message_builder.build_system_messages") as mock_sys, \
          patch("aicoder.coders.message_builder.build_chat_files_messages") as mock_chat, \
