@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 from aicoder.coders.base_coder import Coder
 from aicoder.io import InputOutput
 from aicoder.models import Model
@@ -15,40 +17,20 @@ def test_wholefile_coder_initializes_tool_state():
     assert coder.tool_exec_state.is_plan_mode is False
 
 
-class _SimpleModel(Model):
-    def __init__(self):
-        super().__init__("machao-flash")
-        self.streaming = False
-
-    def simple_send(self, messages):
-        return "hello from assistant"
-
-
-class _RepoSpy:
-    def __init__(self):
-        self.commit_calls = 0
-
-    def get_head_commit_sha(self):
-        return "abc1234"
-
-    def get_tracked_files(self):
-        return []
-
-    def commit(self, *args, **kwargs):
-        self.commit_calls += 1
-        return None
-
-
-def test_plain_chat_does_not_auto_commit():
+def test_coder_run_delegates_to_agent_runtime():
+    """Verify Coder.run(with_message=...) creates runtime and delegates."""
     coder = Coder.create(
-        main_model=_SimpleModel(),
+        main_model=Model("machao-flash"),
         edit_format="whole",
         io=InputOutput(pretty=False, yes=True),
-        auto_commits=True,
     )
-    repo = _RepoSpy()
-    coder.repo = repo
 
-    coder.run_one("你好")
+    fake_runtime = MagicMock()
+    fake_runtime.run_user_turn.return_value = "ok-from-runtime"
 
-    assert repo.commit_calls == 0
+    with patch("aicoder.agent_runtime._create_runtime", return_value=fake_runtime) as mock_factory:
+        result = coder.run(with_message="hello")
+
+    mock_factory.assert_called_once_with(coder)
+    fake_runtime.run_user_turn.assert_called_once_with("hello")
+    assert result == "ok-from-runtime"

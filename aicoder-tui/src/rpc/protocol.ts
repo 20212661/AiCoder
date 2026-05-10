@@ -28,6 +28,13 @@ export interface JsonRpcError {
 
 // Backend → TUI notifications
 export interface BackendNotifications {
+  "ready": {
+    model?: string;
+    planMode?: boolean;
+    mode?: "sniff" | "plan" | "act";
+    yolo?: boolean;
+    phase?: string;
+  };
   "stream/token": { text: string };
   "stream/finalize": { text: string };
   "assistant/output": { text: string };
@@ -36,7 +43,7 @@ export interface BackendNotifications {
   "tool/output": { message: string };
   "tool/error": { message: string };
   "approval/request": { id: string; question: string; diff?: string };
-  "confirm/ask": { id: string; question: string };
+  "confirm/ask": { id: string; question: string; default?: string };
   "input/request": {
     root: string;
     commands?: string[];
@@ -48,7 +55,7 @@ export interface BackendNotifications {
     tokens?: number;
     cost?: number;
     planMode?: boolean;
-    mode?: "plan" | "act";
+    mode?: "sniff" | "plan" | "act";
     yolo?: boolean;
     phase?: string;
   };

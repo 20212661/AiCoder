@@ -374,6 +374,9 @@ class ToolExecutor:
             if auto_reason:
                 reason = auto_reason
 
+        if hasattr(coder, "_approval") and coder._approval is not None:
+            desc = coder._approval.format_approval_title(tool_call.name, desc)
+
         full_desc = desc
         if reason:
             full_desc = f"{desc}\n  Reason: {reason}"

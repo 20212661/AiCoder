@@ -3,6 +3,7 @@ JSON-RPC over stdio 的 IO 实现
 供外部 TUI（如 aicoder-tui）通过子进程 stdio 通信
 """
 import json
+import os
 import sys
 import uuid
 import threading
@@ -44,10 +45,26 @@ class JsonRpcIO(InputOutput):
     def stop(self):
         """停止 reader 线程"""
         self._running = False
+        # Unblock the background stdin reader so --serve can exit cleanly
+        # on /quit and during test teardown.
+        # On Windows, closing the TextIOWrapper or its buffer does NOT
+        # interrupt a blocking readline() at the C level.  We must close
+        # the underlying OS file descriptor directly.
+        try:
+            raw = getattr(self.reader, "buffer", self.reader)
+            fd = raw.fileno()
+            os.close(fd)
+        except Exception:
+            pass
+        try:
+            self.reader.close()
+        except Exception:
+            pass
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=1.0)
 
     def _read_loop(self):
         """后台线程：从 stdin 逐行读取 JSON-RPC 消息"""
-        sys.stderr.write("[rpc] read_loop started\n"); sys.stderr.flush()
         try:
           for line in self.reader:
             if not self._running:
@@ -55,7 +72,6 @@ class JsonRpcIO(InputOutput):
             line = line.strip()
             if not line:
                 continue
-            sys.stderr.write(f"[rpc] recv: {line[:120]}\n"); sys.stderr.flush()
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
@@ -200,10 +216,10 @@ class JsonRpcIO(InputOutput):
             "addable_files": list(addable_files) if addable_files else [],
             "commands": list(commands) if commands else [],
         })
-        try:
-            return self._input_queue.get(timeout=300)
-        except Empty:
-            return None
+        # RPC/TUI mode should keep the backend process alive while idle.
+        # Use a blocking wait here instead of a finite timeout so the TUI
+        # does not get disconnected after several minutes of inactivity.
+        return self._input_queue.get()
 
     def tool_output(self, message="", bold=False):
         self._notify("tool/output", {"message": message, "bold": bold})
@@ -288,7 +304,6 @@ class JsonRpcIO(InputOutput):
         """进入 RPC 服务主循环"""
         self.start()
         self._current_model_name = coder.main_model.name if coder.main_model else "unknown"
-        sys.stderr.write(f"[rpc] serve started, model={coder.main_model.name}\n"); sys.stderr.flush()
         self._notify("ready", self._build_status(coder))
 
         try:
@@ -307,8 +322,6 @@ class JsonRpcIO(InputOutput):
                     )
                     if user_input is None:
                         break
-
-                    sys.stderr.write(f"[rpc] got input: {user_input[:60]!r}\n"); sys.stderr.flush()
 
                     # 处理斜杠命令
                     if user_input.startswith("/"):
@@ -337,11 +350,9 @@ class JsonRpcIO(InputOutput):
                             self._notify("status/update", self._build_status(coder))
                             continue
 
-                    sys.stderr.write("[rpc] calling coder.run()\n"); sys.stderr.flush()
-                    thinking_phase = "planning" if getattr(getattr(coder, "tool_exec_state", None), "is_plan_mode", False) else "acting"
+                    thinking_phase = "sniffing" if getattr(getattr(coder, "tool_exec_state", None), "mode", "act") == "sniff" else ("planning" if getattr(getattr(coder, "tool_exec_state", None), "is_plan_mode", False) else "acting")
                     self._notify("status/update", self._build_status(coder, thinking_phase))
                     result = coder.run(with_message=user_input)
-                    sys.stderr.write("[rpc] coder.run() done\n"); sys.stderr.flush()
                     if isinstance(result, SwitchCoder):
                         kwargs = result.kwargs
                         kwargs["io"] = self
@@ -357,4 +368,13 @@ class JsonRpcIO(InputOutput):
 
         finally:
             self.stop()
-            self._notify("shutdown", {})
+            try:
+                self._notify("shutdown", {})
+            except Exception:
+                pass
+            # Close stdout to prevent the process from hanging during
+            # Python's shutdown sequence when the parent stops reading.
+            try:
+                self.writer.close()
+            except Exception:
+                pass

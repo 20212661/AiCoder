@@ -116,4 +116,4 @@ class ExecutionState:
 
     @property
     def is_plan_mode(self) -> bool:
-        return self.mode == "plan"
+        return self.mode in ("plan", "sniff")

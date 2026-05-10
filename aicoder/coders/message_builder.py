@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Message formatting helpers extracted from base_coder."""
 
 import os
@@ -12,7 +13,7 @@ def build_system_messages(coder: "Coder") -> list[dict[str, Any]]:
     """Build and cache the system prompt + example messages."""
     mode_key = (
         coder.main_model.name if coder.main_model else "",
-        "plan" if coder.tool_exec_state.is_plan_mode else "act",
+        coder.tool_exec_state.mode,
     )
     if coder._cached_system_key == mode_key and coder._cached_system_messages is not None:
         return coder._cached_system_messages
@@ -52,7 +53,7 @@ def format_messages(coder: "Coder") -> list[dict[str, Any]]:
 def build_runtime_state_messages(coder: "Coder") -> list[dict[str, Any]]:
     """Attach the exact live model/mode state so meta questions answer reliably."""
     current_model = coder.main_model.name if coder.main_model else "unknown"
-    current_mode = "plan" if coder.tool_exec_state.is_plan_mode else "act"
+    current_mode = coder.tool_exec_state.mode
     return [
         dict(
             role="system",
@@ -67,8 +68,24 @@ def build_runtime_state_messages(coder: "Coder") -> list[dict[str, Any]]:
 
 
 def build_mode_messages(coder: "Coder") -> list[dict[str, Any]]:
-    if not coder.tool_exec_state.is_plan_mode:
+    mode = coder.tool_exec_state.mode
+    if mode == "act":
         return []
+
+    if mode == "sniff":
+        from ..sniffing.recon_summary import build_sniff_recon_summary
+        recon = build_sniff_recon_summary(coder)
+        content = (
+            "SNIFF 嗅探模式附加提示：\n"
+            "你正处于嗅探模式——调查发酵区结构，识别构石痕迹，追踪异味来源与污染扩散路径。\n"
+            "- 仅使用 read_file, search_files, list_files, list_code_defs 及只读 run_shell。\n"
+            "- 禁止文件编辑和任何变更命令。\n"
+            "- 输出必须采用「嗅探报告」格式：发酵区概况、构石痕迹、异味来源、污染扩散路径、嗅探结论、建议动作。\n"
+            "- 调查充分后，建议用户切换 /plan（组织方案）或 /act（直接修改）。"
+        )
+        if recon:
+            content += "\n\n" + recon
+        return [dict(role="system", content=content)]
 
     return [
         dict(

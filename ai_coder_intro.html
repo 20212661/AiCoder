@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AiCoder - 自我介绍</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            color: #fff;
+        }
+
+        #info {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+            pointer-events: none;
+            text-shadow: 0 0 30px rgba(0,0,0,0.8);
+        }
+
+        #info h1 {
+            font-size: 4rem;
+            margin: 0;
+            letter-spacing: 6px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00d2ff, #7a5cff, #ff6ec7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: fadeInDown 1.5s ease-out;
+        }
+
+        #info .subtitle {
+            font-size: 1.4rem;
+            margin-top: 16px;
+            letter-spacing: 4px;
+            opacity: 0.9;
+            animation: fadeInUp 1.5s ease-out 0.3s both;
+        }
+
+        #info .desc {
+            font-size: 1rem;
+            margin-top: 28px;
+            max-width: 600px;
+            line-height: 1.8;
+            opacity: 0.75;
+            animation: fadeInUp 1.5s ease-out 0.6s both;
+        }
+
+        #info .badges {
+            margin-top: 30px;
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            animation: fadeInUp 1.5s ease-out 0.9s both;
+            pointer-events: auto;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 18px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            background: rgba(255,255,255,0.12);
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.2);
+            transition: all 0.3s;
+        }
+
+        .badge:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+        }
+
+        #footer {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.8rem;
+            opacity: 0.4;
+            z-index: 10;
+            letter-spacing: 2px;
+        }
+
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-30px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 600px) {
+            #info h1 { font-size: 2.4rem; }
+            #info .subtitle { font-size: 1rem; }
+            #info .desc { font-size: 0.85rem; max-width: 90%; }
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h1>AiCoder</h1>
+        <div class="subtitle">✦ AI 结对编程助手 ✦</div>
+        <div class="desc">
+            我是 AiCoder，一名专注的 AI 编程搭档。<br />
+            我理解代码、熟练使用工具、热爱解决问题。<br />
+            随时随地，与你一起编写更好的软件。
+        </div>
+        <div class="badges">
+            <span class="badge">Python</span>
+            <span class="badge">TypeScript</span>
+            <span class="badge">Node.js</span>
+            <span class="badge">React</span>
+            <span class="badge">Tree-sitter</span>
+            <span class="badge">LLM</span>
+            <span class="badge">CLI</span>
+            <span class="badge">TUI</span>
+        </div>
+    </div>
+    <div id="footer">AI CODER · PAIR PROGRAMMING ASSISTANT</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- 场景 / 相机 / 渲染器 ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0b0b1a);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 12);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        // 简易轨道控制（仅用于轻微交互）
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.5;
+        controls.enableZoom = true;
+        controls.enablePan = false;
+        controls.target.set(0, 0, 0);
+        controls.maxPolarAngle = Math.PI / 2.2;
+        controls.minPolarAngle = Math.PI / 4;
+
+        // --- 粒子系统 ---
+        const particleCount = 3500;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+        const sizes = new Float32Array(particleCount);
+
+        const color1 = new THREE.Color(0x00d2ff);
+        const color2 = new THREE.Color(0x7a5cff);
+        const color3 = new THREE.Color(0xff6ec7);
+
+        for (let i = 0; i < particleCount; i++) {
+            const radius = 4 + Math.random() * 6;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+
+            positions[i * 3]     = radius * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = radius * Math.cos(phi) * 0.8;
+            positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
+
+            const mixVal = Math.random();
+            let c;
+            if (mixVal < 0.4) c = color1.clone().lerp(color2, Math.random());
+            else if (mixVal < 0.7) c = color2.clone().lerp(color3, Math.random());
+            else c = color3.clone().lerp(color1, Math.random());
+
+            colors[i * 3]     = c.r;
+            colors[i * 3 + 1] = c.g;
+            colors[i * 3 + 2] = c.b;
+
+            sizes[i] = 0.04 + Math.random() * 0.12;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+        // 圆形粒子纹理
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+        gradient.addColorStop(0.6, 'rgba(255,255,255,0.3)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 32, 32);
+        const particleTexture = new THREE.CanvasTexture(canvas);
+
+        const material = new THREE.PointsMaterial({
+            size: 0.3,
+            map: particleTexture,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.9,
+            sizeAttenuation: true
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        // --- 中心发光球体（微光核心） ---
+        const coreGeo = new THREE.SphereGeometry(0.6, 32, 32);
+        const coreMat = new THREE.MeshBasicMaterial({
+            color: 0x7a5cff,
+            transparent: true,
+            opacity: 0.3
+        });
+        const core = new THREE.Mesh(coreGeo, coreMat);
+        scene.add(core);
+
+        // 外部光晕
+        const glowGeo = new THREE.SphereGeometry(0.9, 32, 32);
+        const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x00d2ff,
+            transparent: true,
+            opacity: 0.1,
+            wireframe: true
+        });
+        const glow = new THREE.Mesh(glowGeo, glowMat);
+        scene.add(glow);
+
+        // 小星星（背景微粒子）
+        const starGeo = new THREE.BufferGeometry();
+        const starCount = 800;
+        const starPos = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount; i++) {
+            starPos[i * 3]     = (Math.random() - 0.5) * 80;
+            starPos[i * 3 + 1] = (Math.random() - 0.5) * 80;
+            starPos[i * 3 + 2] = (Math.random() - 0.5) * 80 - 20;
+        }
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        const starMat = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.08,
+            transparent: true,
+            opacity: 0.4,
+            blending: THREE.AdditiveBlending
+        });
+        const stars = new THREE.Points(starGeo, starMat);
+        scene.add(stars);
+
+        // --- 动画循环 ---
+        let clock = new THREE.Clock();
+
+        function animate() {
+            const elapsed = clock.getElapsedTime();
+
+            // 粒子系统缓慢旋转
+            particleSystem.rotation.y = elapsed * 0.04;
+            particleSystem.rotation.x = Math.sin(elapsed * 0.02) * 0.05;
+
+            // 核心脉动
+            const pulse = 1 + Math.sin(elapsed * 1.5) * 0.1;
+            core.scale.set(pulse, pulse, pulse);
+            glow.scale.set(pulse * 1.2, pulse * 1.2, pulse * 1.2);
+            glow.rotation.x = elapsed * 0.2;
+            glow.rotation.y = elapsed * 0.3;
+
+            // 星星微微闪烁
+            stars.rotation.y = elapsed * 0.005;
+
+            controls.update();
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+
+        // --- 自适应 ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

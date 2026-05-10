@@ -189,3 +189,15 @@ class TestToolCategoryMap:
         expected = {"read_file", "write_file", "edit_file", "run_shell",
                     "list_files", "search_files", "list_code_defs"}
         assert set(TOOL_CATEGORY_MAP.keys()) == expected
+
+
+class TestApprovalTitle:
+    def test_format_approval_title(self):
+        c = ApprovalController()
+        title = c.format_approval_title("edit_file", "Edit src/main.py")
+        assert title == "Edit src/main.py"
+
+    def test_format_approval_title_passthrough(self):
+        c = ApprovalController()
+        title = c.format_approval_title("run_shell", "Run npm test")
+        assert title == "Run npm test"

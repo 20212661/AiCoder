@@ -8,8 +8,6 @@ from __future__ import annotations
 import glob
 import os
 import re
-import shlex
-import subprocess
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -418,6 +416,18 @@ class Commands:
         state = "ON" if self.coder._approval.settings.yolo else "OFF"
         self.io.tool_output(f"YOLO mode: {state}")
 
+    def cmd_sniff(self, args: str) -> None:
+        """嗅探模式（只读调查，识别构石痕迹，追踪异味来源）"""
+        self.coder.tool_executor.set_mode("sniff")
+        self.coder._update_tool_model_info()
+        self.io.tool_output(
+            "已进入 SNIFF 嗅探模式。\n"
+            "  - 当前任务：检查发酵区结构，识别构石痕迹，追踪异味来源与污染扩散路径。\n"
+            "  - 本模式严格只读，不进行任何文件修改或副作用命令执行。\n"
+            "  - 输出将采用「嗅探报告」格式。\n"
+            "  - 若需要整理实施方案，请切换 /plan；若需要直接修改，请切换 /act。"
+        )
+
     def cmd_approval(self, args: str) -> None:
         """显示/修改自动批准设置。用法: /approval [category on|off]"""
         if self.coder._approval is None:
@@ -465,40 +475,31 @@ class Commands:
 
     def cmd_git(self, args: str) -> None:
         """运行 git 命令"""
-        try:
-            env = dict(os.environ)
-            env["GIT_EDITOR"] = "true"
-            result = subprocess.run(
-                ["git"] + shlex.split(args),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-            )
-            if result.stdout:
-                self.io.tool_output(result.stdout)
-        except Exception as e:
-            self.io.tool_error(f"Error running git command: {e}")
+        if not args.strip():
+            return
+        command = f"git {args}"
+        self._run_via_tool_system(command)
 
     def cmd_run(self, args: str) -> None:
         """运行 shell 命令"""
         if not args.strip():
             return
+        self._run_via_tool_system(args)
 
-        try:
-            result = subprocess.run(
-                shlex.split(args),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=self.coder.root,
-            )
-            if result.stdout:
-                self.io.tool_output(result.stdout)
-            if result.returncode != 0:
-                self.io.tool_warning(f"Exit code: {result.returncode}")
-        except Exception as e:
-            self.io.tool_error(f"Error running command: {e}")
+    def _run_via_tool_system(self, command: str) -> None:
+        """通过工具系统执行 shell 命令，统一走审批/超时/结果处理链。"""
+        from .tools.result import ToolCall
+        tool_call = ToolCall("run_shell", {"command": command})
+        result = self.coder.tool_executor.execute(tool_call)
+        if result.success:
+            output = result.output.strip()
+            if output:
+                self.io.tool_output(output)
+        else:
+            if result.rejected:
+                self.io.tool_warning(f"Command rejected: {command[:200]}")
+            else:
+                self.io.tool_error(result.error or "Command failed")
 
     def cmd_ls(self, args: str) -> None:
         """列出聊天中的文件"""

@@ -228,12 +228,77 @@ class TestCmdModes:
         mock_coder_cmds.tool_executor.set_mode.assert_called_once_with("act")
         assert any("routine shell actions" in o for o in mock_coder_cmds.io.outputs)
 
+    def test_sniff_sets_sniff_mode(self, cmds, mock_coder_cmds):
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds._update_tool_model_info = MagicMock()
+
+        cmds.cmd_sniff("")
+
+        mock_coder_cmds.tool_executor.set_mode.assert_called_once_with("sniff")
+        assert any("SNIFF" in o for o in mock_coder_cmds.io.outputs)
+        assert any("嗅探模式" in o for o in mock_coder_cmds.io.outputs)
+        assert any("严格只读" in o for o in mock_coder_cmds.io.outputs)
+        assert any("嗅探报告" in o for o in mock_coder_cmds.io.outputs)
+
 
 class TestCmdRun:
-    def test_run_echo(self, cmds, mock_coder_cmds):
-        cmds.cmd_run("python -c \"print('hello')\"")
-        assert any("hello" in o for o in mock_coder_cmds.io.outputs)
+    def test_run_uses_tool_system(self, cmds, mock_coder_cmds):
+        from aicoder.tools.result import ToolResult
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds.tool_executor.execute.return_value = ToolResult.ok(
+            "run_shell", "hello world"
+        )
+        cmds.cmd_run("echo hello")
+        mock_coder_cmds.tool_executor.execute.assert_called_once()
+        call_args = mock_coder_cmds.tool_executor.execute.call_args[0][0]
+        assert call_args.name == "run_shell"
+        assert call_args.params["command"] == "echo hello"
+        assert any("hello world" in o for o in mock_coder_cmds.io.outputs)
 
     def test_run_empty(self, cmds, mock_coder_cmds):
         cmds.cmd_run("")
         assert len(mock_coder_cmds.io.outputs) == 0
+
+    def test_run_failure_shows_error(self, cmds, mock_coder_cmds):
+        from aicoder.tools.result import ToolResult
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds.tool_executor.execute.return_value = ToolResult.fail(
+            "run_shell", "Command failed: exit code 1"
+        )
+        cmds.cmd_run("false")
+        assert any("Command failed" in e for e in mock_coder_cmds.io.errors)
+
+    def test_run_rejected_shows_warning(self, cmds, mock_coder_cmds):
+        from aicoder.tools.result import ToolResult
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds.tool_executor.execute.return_value = ToolResult.create_rejected("run_shell")
+        cmds.cmd_run("rm -rf /")
+        assert any("rejected" in w for w in mock_coder_cmds.io.warnings)
+
+
+class TestCmdGit:
+    def test_git_uses_tool_system(self, cmds, mock_coder_cmds):
+        from aicoder.tools.result import ToolResult
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds.tool_executor.execute.return_value = ToolResult.ok(
+            "run_shell", "On branch main"
+        )
+        cmds.cmd_git("status")
+        mock_coder_cmds.tool_executor.execute.assert_called_once()
+        call_args = mock_coder_cmds.tool_executor.execute.call_args[0][0]
+        assert call_args.name == "run_shell"
+        assert call_args.params["command"] == "git status"
+        assert any("On branch main" in o for o in mock_coder_cmds.io.outputs)
+
+    def test_git_empty(self, cmds, mock_coder_cmds):
+        cmds.cmd_git("")
+        assert len(mock_coder_cmds.io.outputs) == 0
+
+    def test_git_failure(self, cmds, mock_coder_cmds):
+        from aicoder.tools.result import ToolResult
+        mock_coder_cmds.tool_executor = MagicMock()
+        mock_coder_cmds.tool_executor.execute.return_value = ToolResult.fail(
+            "run_shell", "fatal: not a git repository"
+        )
+        cmds.cmd_git("status")
+        assert any("fatal" in e for e in mock_coder_cmds.io.errors)

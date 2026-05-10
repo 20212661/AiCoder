@@ -43,10 +43,6 @@ class AskCoder(Coder):
                 "response but will NOT be applied. Re-run with --edit-format diff or "
                 "--edit-format whole to apply edits."
             )
-            self.reflected_message = (
-                "You are in Ask (read-only) mode. Do not propose SEARCH/REPLACE edits. "
-                "Just answer the question or provide the analysis."
-            )
 
         elif content.strip().startswith("```") and fence_blocks >= 2:
             self.io.tool_warning(

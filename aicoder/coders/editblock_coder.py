@@ -29,15 +29,10 @@ class EditBlockCoder(Coder):
             edits = list(self.get_edits())
         except ValueError as e:
             self.io.tool_error(str(e))
-            self.reflected_message = f"Edit block parsing error:\n{e}"
             return
 
-        # 分离 shell 命令
-        shell_edits = [edit for edit in edits if edit[0] is None]
+        # Filter to file edits only (shell commands are not auto-executed)
         edits = [edit for edit in edits if edit[0] is not None]
-
-        if shell_edits:
-            self.shell_commands += [edit[1] for edit in shell_edits]
 
         if not edits:
             return
@@ -136,7 +131,6 @@ The REPLACE lines are already in {path}!
 Don't re-send them.
 Just reply with fixed versions of the {blocks} above that failed to match.
 """
-        self.reflected_message = res
 
 
 # ---- 匹配算法 ----

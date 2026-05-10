@@ -48,7 +48,7 @@ export function App() {
 
   if (state === "connecting") {
     return (
-      <Box flexDirection="column" style={{ paddingY: 1 }}>
+      <Box flexDirection="column" paddingY={1}>
         <Text bold color="claude">AiCoder</Text>
         <Text dimColor>Connecting...</Text>
       </Box>
@@ -57,7 +57,7 @@ export function App() {
 
   if (state === "error") {
     return (
-      <Box flexDirection="column" style={{ paddingY: 1 }}>
+      <Box flexDirection="column" paddingY={1}>
         <Text color="error">Error: {errorMsg}</Text>
         <Text dimColor>python -m aicoder --serve</Text>
       </Box>

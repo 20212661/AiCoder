@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export interface AppConfig {
   model: string;
-  mode: "plan" | "act";
+  mode: "sniff" | "plan" | "act";
   theme: string;
   showSidebar: boolean;
   showThinking: boolean;
@@ -16,7 +16,7 @@ export interface AppConfig {
 
 interface ConfigState extends AppConfig {
   setModel: (model: string) => void;
-  setMode: (mode: "plan" | "act") => void;
+  setMode: (mode: "sniff" | "plan" | "act") => void;
   setPlanMode: (planMode: boolean) => void;
   setTheme: (theme: string) => void;
   toggleSidebar: () => void;
@@ -45,10 +45,10 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ model });
   },
   setMode(mode) {
-    set({ mode, planMode: mode === "plan" });
+    set({ mode, planMode: mode === "plan" || mode === "sniff" });
   },
   setPlanMode(planMode) {
-    set({ planMode, mode: planMode ? "plan" : "act" });
+    set({ planMode, mode: planMode ? "plan" : "act" as const });
   },
   setTheme(theme) {
     set({ theme });
@@ -77,9 +77,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
   updateFromBackend(params) {
     const updates: Partial<AppConfig> = {};
     if (params.model && typeof params.model === "string") updates.model = params.model;
-    if (params.mode === "plan" || params.mode === "act") {
+    if (params.mode === "sniff" || params.mode === "plan" || params.mode === "act") {
       updates.mode = params.mode;
-      updates.planMode = params.mode === "plan";
+      updates.planMode = params.mode === "plan" || params.mode === "sniff";
     }
     if (typeof params.planMode === "boolean") updates.planMode = params.planMode;
     if (!updates.mode && typeof params.planMode === "boolean") {

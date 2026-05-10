@@ -6,6 +6,7 @@ import { useConfigStore } from "../../stores/configStore.js";
 import { getBackendApi } from "../hooks/useOfficialBackend.js";
 import { SlashCommandMenu, filterCommands } from "./SlashCommandMenu.js";
 import { ModelPicker } from "./ModelPicker.js";
+import { theme } from "../theme.js";
 
 interface InputBoxProps {
   disabled?: boolean;
@@ -51,6 +52,10 @@ export function InputBox({ disabled = false }: InputBoxProps) {
           useConfigStore.getState().setMode("act");
           getBackendApi()?.submitInput("/act").catch(() => {});
           return true;
+        case "/sniff":
+          useConfigStore.getState().setMode("sniff");
+          getBackendApi()?.submitInput("/sniff").catch(() => {});
+          return true;
         case "/yolo":
           getBackendApi()?.submitInput("/yolo").catch(() => {});
           return true;
@@ -58,14 +63,16 @@ export function InputBox({ disabled = false }: InputBoxProps) {
           useChatStore.getState().addToolOutput(
             [
               "Available commands:",
-              "  /plan   - Switch to plan mode (read-only analysis)",
-              "  /act    - Switch to act mode (execute changes)",
-              "  /model  - Change AI model",
-              "  /clear  - Clear chat history",
+              "  /sniff   - 嗅探仓库结构与构石痕迹（只读调查）",
+              "  /plan    - Create a plan (read-only analysis)",
+              "  /act     - Execute changes (full tool access)",
+              "  /model   - Change AI model",
+              "  /clear   - Clear chat history",
               "  /compact - Compact conversation context",
-              "  /yolo   - Toggle auto-approve mode",
-              "  /help   - Show this help",
-              "  /exit   - Exit application",
+              "  /yolo    - Toggle auto-approve mode",
+              "",
+              "  /help    - Show this help",
+              "  /exit    - Exit application",
               "",
               "Keyboard shortcuts:",
               "  ↑↓      - Navigate history / command menu",
@@ -216,6 +223,7 @@ export function InputBox({ disabled = false }: InputBoxProps) {
 
   const pendingApproval = useApprovalStore.getState().pending;
   const isDisabled = disabled || isStreaming || !!pendingApproval;
+  const palette = theme.colors;
 
   return (
     <Box flexDirection="column">
@@ -233,19 +241,19 @@ export function InputBox({ disabled = false }: InputBoxProps) {
       />
 
       {/* Input line */}
-      <Box borderStyle="single" borderColor={pendingApproval ? "yellow" : "gray"} paddingX={1}>
-        <Text color="cyan" bold>
+      <Box borderStyle="single" borderColor={pendingApproval ? palette.warning : palette.dim} paddingX={1}>
+        <Text color={palette.primary} bold>
           {">"}
         </Text>
         <Text> </Text>
         {pendingApproval ? (
-          <Text color="yellow">waiting for approval...</Text>
+          <Text color={palette.warning}>waiting for approval...</Text>
         ) : isStreaming ? (
-          <Text color="yellow">◐ streaming... (Esc to cancel)</Text>
+          <Text color={palette.warning}>◐ streaming... (Esc to cancel)</Text>
         ) : (
           <Text>{input}</Text>
         )}
-        {!isDisabled && <Text color="gray">▎</Text>}
+        {!isDisabled && <Text color={palette.dim}>▎</Text>}
       </Box>
     </Box>
   );

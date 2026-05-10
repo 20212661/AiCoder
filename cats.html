@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>喵星人图鉴 🐱</title>
+  <style>
+    /* ===== 全局重置 ===== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'PingFang SC', Roboto, 'Helvetica Neue', sans-serif;
+      background: linear-gradient(135deg, #fdf6f0 0%, #fce4d6 50%, #fff3e0 100%);
+      min-height: 100vh;
+      color: #3e2c1f;
+      padding-bottom: 80px;
+    }
+
+    /* ===== 导航栏 ===== */
+    .navbar {
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px);
+      padding: 16px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 20px rgba(0, 0, 0, 0.06);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 24px;
+      font-weight: 700;
+      color: #e67e22;
+    }
+
+    .navbar .logo span {
+      font-size: 28px;
+    }
+
+    .navbar nav a {
+      text-decoration: none;
+      color: #5a4a3a;
+      margin-left: 28px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .navbar nav a:hover {
+      color: #e67e22;
+    }
+
+    /* ===== 头部大图 ===== */
+    .hero {
+      text-align: center;
+      padding: 60px 20px 40px;
+    }
+
+    .hero h1 {
+      font-size: 48px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #e67e22, #f39c12);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 18px;
+      color: #7a6a5a;
+      margin-top: 12px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* ===== 猫猫卡片网格 ===== */
+    .grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 32px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      cursor: pointer;
+    }
+
+    .card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.14);
+    }
+
+    .card-img {
+      width: 100%;
+      height: 220px;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* 给没有图片的连接做占位 */
+    .card-img-placeholder {
+      width: 100%;
+      height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 72px;
+      background: linear-gradient(135deg, #fdebd0, #fadbd8);
+    }
+
+    .card-body {
+      padding: 20px 22px 24px;
+    }
+
+    .card-body h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .card-body .en-name {
+      font-size: 14px;
+      color: #b0a090;
+      margin-bottom: 10px;
+    }
+
+    .card-body .desc {
+      font-size: 15px;
+      line-height: 1.6;
+      color: #5a4a3a;
+      margin-bottom: 12px;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tags span {
+      background: #fef0e6;
+      color: #d35400;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 14px;
+      border-radius: 20px;
+    }
+
+    /* ===== 页脚 ===== */
+    .footer {
+      text-align: center;
+      padding: 40px 20px;
+      color: #b0a090;
+      font-size: 14px;
+      margin-top: 40px;
+    }
+
+    /* ===== 响应式 ===== */
+    @media (max-width: 640px) {
+      .navbar {
+        padding: 14px 20px;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .navbar nav a {
+        margin: 0 12px;
+      }
+
+      .hero h1 {
+        font-size: 32px;
+      }
+
+      .hero p {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ===== 导航栏 ===== -->
+<header class="navbar">
+  <div class="logo">
+    <span>🐱</span> 喵星人图鉴
+  </div>
+  <nav>
+    <a href="#">首页</a>
+    <a href="#">品种</a>
+    <a href="#">趣闻</a>
+    <a href="#">关于</a>
+  </nav>
+</header>
+
+<!-- ===== 标题区 ===== -->
+<section class="hero">
+  <h1>🐈 欢迎来到喵星球</h1>
+  <p>这里有各种可爱的猫猫品种介绍，快来认识它们吧！</p>
+</section>
+
+<!-- ===== 猫猫卡片 ===== -->
+<section class="grid">
+
+  <!-- 1. 英国短毛猫 -->
+  <div class="card">
+    <div class="card-img-placeholder">🇬🇧</div>
+    <div class="card-body">
+      <h2>英国短毛猫</h2>
+      <div class="en-name">British Shorthair</div>
+      <p class="desc">
+        圆脸大眼、毛茸茸的小胖子，性格温顺安静，是家庭陪伴的绝佳选择。
+      </p>
+      <div class="tags">
+        <span>温柔</span>
+        <span>独立</span>
+        <span>圆脸</span>
+        <span>易打理</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 布偶猫 -->
+  <div class="card">
+    <div class="card-img-placeholder">🪢</div>
+    <div class="card-body">
+      <h2>布偶猫</h2>
+      <div class="en-name">Ragdoll</div>
+      <p class="desc">
+        名副其实的"布偶"，抱起来软绵绵，性格粘人，非常喜欢跟主人互动。
+      </p>
+      <div class="tags">
+        <span>粘人</span>
+        <span>温柔</span>
+        <span>长毛</span>
+        <span>蓝眼睛</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 暹罗猫 -->
+  <div class="card">
+    <div class="card-img-placeholder">🇹🇭</div>
+    <div class="card-body">
+      <h2>暹罗猫</h2>
+      <div class="en-name">Siamese</div>
+      <p class="desc">
+        猫界"话痨"，聪明好动，对主人极度忠诚，喜欢"聊天"和玩耍。
+      </p>
+      <div class="tags">
+        <span>话痨</span>
+        <span>聪明</span>
+        <span>好动</span>
+        <span>忠诚</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 缅因猫 -->
+  <div class="card">
+    <div class="card-img-placeholder">🦁</div>
+    <div class="card-body">
+      <h2>缅因猫</h2>
+      <div class="en-name">Maine Coon</div>
+      <p class="desc">
+        体型最大的家猫之一，外表霸气内心温柔，被称为"温柔的巨人"。
+      </p>
+      <div class="tags">
+        <span>大型猫</span>
+        <span>温柔</span>
+        <span>长毛</span>
+        <span>亲人</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 波斯猫 -->
+  <div class="card">
+    <div class="card-img-placeholder">👑</div>
+    <div class="card-body">
+      <h2>波斯猫</h2>
+      <div class="en-name">Persian</div>
+      <p class="desc">
+        猫中贵族，拥有华丽的长毛和扁平的脸，性格安静优雅，喜欢悠闲生活。
+      </p>
+      <div class="tags">
+        <span>优雅</span>
+        <span>安静</span>
+        <span>长毛</span>
+        <span>贵族</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. 苏格兰折耳猫 -->
+  <div class="card">
+    <div class="card-img-placeholder">🦉</div>
+    <div class="card-body">
+      <h2>苏格兰折耳猫</h2>
+      <div class="en-name">Scottish Fold</div>
+      <p class="desc">
+        耳朵向前折叠，看起来像一只小猫头鹰，性格甜美、温和，喜欢安静陪伴。
+      </p>
+      <div class="tags">
+        <span>折耳</span>
+        <span>甜美</span>
+        <span>温和</span>
+        <span>稀有</span>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- ===== 页脚 ===== -->
+<footer class="footer">
+  🐾 喵星人图鉴 &copy; 2025 &nbsp;·&nbsp; 用 ❤️ 打造
+</footer>
+
+</body>
+</html>

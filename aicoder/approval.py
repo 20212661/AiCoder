@@ -145,6 +145,9 @@ class ApprovalController:
     def __init__(self, settings: AutoApprovalSettings | None = None):
         self.settings = settings or AutoApprovalSettings()
 
+    def format_approval_title(self, tool_name: str, description: str) -> str:
+        return description
+
     # ---- public API --------------------------------------------------------
 
     def should_auto_approve(self, tool_name: str, params: dict | None = None) -> tuple[bool, str]:
