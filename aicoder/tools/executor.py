@@ -100,6 +100,17 @@ class ToolExecutor:
         return self._state
 
     def execute(self, tool_call: ToolCall, skip_permission: bool = False) -> ToolResult:
+        """Execute a tool call. All exits return ToolResult — never raises."""
+        try:
+            return self._execute_inner(tool_call, skip_permission)
+        except Exception as exc:
+            self._state.on_failure(tool_call.name, tool_call.params)
+            return ToolResult.fail(
+                tool_call.name,
+                f"Execution error: {exc}",
+            )
+
+    def _execute_inner(self, tool_call: ToolCall, skip_permission: bool = False) -> ToolResult:
         if self._state.did_reject_tool:
             return ToolResult.fail(
                 tool_call.name,

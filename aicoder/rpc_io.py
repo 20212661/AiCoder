@@ -294,8 +294,8 @@ class JsonRpcIO(InputOutput):
         """构建统一的状态广播 payload（model / mode / planMode / yolo / phase）"""
         return {
             "model": coder.main_model.name if coder.main_model else "unknown",
-            "planMode": bool(getattr(coder.tool_executor.state, "is_plan_mode", False)),
-            "mode": getattr(coder.tool_executor.state, "mode", "act"),
+            "planMode": coder.tool_exec_state.is_plan_mode,
+            "mode": coder.tool_exec_state.mode,
             "yolo": bool(getattr(coder, "_approval", None) and coder._approval.settings.yolo),
             "phase": phase,
         }
@@ -350,7 +350,8 @@ class JsonRpcIO(InputOutput):
                             self._notify("status/update", self._build_status(coder))
                             continue
 
-                    thinking_phase = "sniffing" if getattr(getattr(coder, "tool_exec_state", None), "mode", "act") == "sniff" else ("planning" if getattr(getattr(coder, "tool_exec_state", None), "is_plan_mode", False) else "acting")
+                    mode = coder.tool_exec_state.mode
+                    thinking_phase = "sniffing" if mode == "sniff" else ("planning" if coder.tool_exec_state.is_plan_mode else "acting")
                     self._notify("status/update", self._build_status(coder, thinking_phase))
                     result = coder.run(with_message=user_input)
                     if isinstance(result, SwitchCoder):

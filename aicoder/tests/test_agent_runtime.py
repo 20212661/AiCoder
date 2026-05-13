@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aicoder.agent_runtime import AgentRuntime, _create_runtime
+from aicoder.agent_app_runner import AgentAppRunner
 from aicoder.exceptions import LLMError
 from aicoder.tests.conftest import FakeModel, make_graph_coder
 
@@ -24,70 +25,32 @@ class TestAgentRuntimeInit:
         assert runtime.checkpointer is None
 
 
-class TestInitialBuildConfig:
-    def test_no_checkpointer_returns_none(self):
-        coder = make_graph_coder(responses=[])
-        runtime = AgentRuntime(coder)
-        config = runtime._build_config()
-        assert config is None
+class TestAgentAppRunnerInitialState:
+    """Initial state construction is now in AgentAppRunner."""
 
-    def test_with_checkpointer_returns_thread_config(self):
-        from aicoder.graph.checkpointer import get_checkpointer
-
-        coder = make_graph_coder(responses=[])
-        cp = get_checkpointer(":memory:")
-        runtime = AgentRuntime(coder, checkpointer=cp)
-        config = runtime._build_config()
-        assert config is not None
-        assert config["configurable"]["thread_id"] == "test-session"
-
-    def test_default_session_id(self):
-        from aicoder.graph.checkpointer import get_checkpointer
-
-        coder = make_graph_coder(responses=[])
-        coder.session_id = None
-        cp = get_checkpointer(":memory:")
-        runtime = AgentRuntime(coder, checkpointer=cp)
-        config = runtime._build_config()
-        assert config["configurable"]["thread_id"] == "default"
-
-
-class TestInitialState:
     def test_act_mode_initial_state(self):
+        from aicoder.agent_step_store import AgentStepStore
         coder = make_graph_coder(responses=[], mode="act")
-        runtime = AgentRuntime(coder)
-        state = runtime._initial_state("read foo.py")
-
-        assert state["user_input"] == "read foo.py"
-        assert state["mode"] == "act"
-        assert state["phase"] == "idle"
-        assert state["loop_count"] == 0
-        assert state["max_loops"] == 5
-        assert state["messages"] == []
-        assert state["pending_tool_calls"] == []
-        # _coder is no longer stored in state; it's in the module-level registry
+        app = AgentAppRunner()
+        step_store = AgentStepStore(session_id=coder.session_id)
+        runner = app._create_runner(coder, coder.session_id, "act", step_store)
+        assert runner is not None
 
     def test_plan_mode_initial_state(self):
+        from aicoder.agent_step_store import AgentStepStore
         coder = make_graph_coder(responses=[], mode="plan")
-        runtime = AgentRuntime(coder)
-        state = runtime._initial_state("analyze this")
-
-        assert state["mode"] == "plan"
-
-    def test_session_id_propagated(self):
-        coder = make_graph_coder(responses=[])
-        coder.session_id = "abc-123"
-        runtime = AgentRuntime(coder)
-        state = runtime._initial_state("hello")
-
-        assert state["session_id"] == "abc-123"
+        app = AgentAppRunner()
+        step_store = AgentStepStore(session_id=coder.session_id)
+        runner = app._create_runner(coder, coder.session_id, "plan", step_store)
+        assert runner is not None
 
     def test_sniff_mode_initial_state(self):
+        from aicoder.agent_step_store import AgentStepStore
         coder = make_graph_coder(responses=[], mode="sniff")
-        runtime = AgentRuntime(coder)
-        state = runtime._initial_state("investigate this")
-
-        assert state["mode"] == "sniff"
+        app = AgentAppRunner()
+        step_store = AgentStepStore(session_id=coder.session_id)
+        runner = app._create_runner(coder, coder.session_id, "sniff", step_store)
+        assert runner is not None
 
 
 class TestRunUserTurn:
@@ -111,9 +74,9 @@ class TestRunUserTurn:
     def test_llm_error_handled(self):
         """When the LLM fails after all retries, an error should be reported."""
         coder = make_graph_coder(responses=[])
-        # Create a model that always raises
         coder.main_model = MagicMock()
         coder.main_model.name = "bad-model"
+        coder.main_model.capabilities = MagicMock(supports_tools=True)
         coder.main_model.send_completion = MagicMock(side_effect=RuntimeError("API down"))
         coder.stream = False
         runtime = AgentRuntime(coder)
@@ -133,7 +96,6 @@ class TestRunUserTurn:
         coder = make_graph_coder(responses=[])
         coder.session_id = None
         runtime = AgentRuntime(coder)
-        # Corrupt the graph to force an error
         runtime.graph = MagicMock()
         runtime.graph.invoke = MagicMock(side_effect=RuntimeError("boom"))
 

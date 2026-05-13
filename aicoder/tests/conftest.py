@@ -119,8 +119,14 @@ class FakeModel:
     def __init__(self, responses: list[str] | None = None, max_input_tokens: int = 128000):
         self.name = "test-model"
         self.max_input_tokens = max_input_tokens
+        self.max_output_tokens = 4096
         self.responses = list(responses or [])
         self._call_idx = 0
+        self.capabilities = SimpleNamespace(supports_tools=False, supports_streaming=True)
+
+    @property
+    def backend_model(self):
+        return self.name
 
     def send_completion(self, messages, stream=False):
         text = self.responses[self._call_idx] if self._call_idx < len(self.responses) else "done"

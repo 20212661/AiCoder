@@ -1,7 +1,14 @@
 """
-WholeFile Coder - 整体文件输出格式
-LLM 返回完整文件内容，Coder 负责解析并写入文件
-参考 Aider 的 wholefile_coder.py
+WholeFile Coder — DEPRECATED compatibility layer.
+
+Coder.create() no longer dispatches to subclasses; it always returns base
+Coder.  The prompts (WholeFilePrompts) are still loaded by
+Coder._apply_edit_format_prompts(), but this class and all its methods
+(process_response, get_edits, apply_edits) are unreachable from the
+AgentRuntime execution path.
+
+Retained for: potential future use of the whole-file matching/parsing
+algorithms if a non-tool-based fallback is ever needed.
 """
 import os
 from pathlib import Path
@@ -17,7 +24,11 @@ class WholeFileCoder(Coder):
     gpt_prompts = WholeFilePrompts()
 
     def process_response(self):
-        """处理 LLM 响应，解析 whole 格式的文件编辑并应用"""
+        """Deprecated legacy hook — not reachable from AgentRuntime path.
+
+        The AgentRuntime + LangGraph pipeline handles response processing
+        through graph nodes (model_node → execute_tool_node → …).
+        """
         content = self.multi_response_content
         if not content:
             return

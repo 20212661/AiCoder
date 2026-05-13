@@ -91,9 +91,10 @@ def test_plan_prompt_does_not_contain_sniff_terms():
     assert "建议动作" not in prompt
 
 
-def test_plan_prompt_has_editing_section():
+def test_plan_prompt_has_no_editing_section():
+    """Plan mode is read-only — editing section should be suppressed."""
     prompt = make_prompt(mode="plan").build()
-    assert "EDITING FILES" in prompt
+    assert "EDITING FILES" not in prompt
 
 
 # ── Act prompt ──

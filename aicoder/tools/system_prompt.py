@@ -4,8 +4,13 @@ System Prompt 生成器 — 对照 Cline 的 12 段模块化系统提示词
 
 每段用 ==== 分隔，分固定和动态两部分。
 所有动态数据通过 configure() 注入。
+
+Mode-related tool boundaries are derived from mode_definitions.py —
+the single source of truth.  This module only *expresses* the rules
+in prompt language; it does not invent new permission rules.
 """
 from .spec import ToolSpec
+from ..mode_definitions import get_mode_def, is_edit_allowed
 
 
 class SystemPrompt:
@@ -101,7 +106,7 @@ Use XML tags to call them:
 
     # ══════ 第 3 段：编辑策略 ══════
     def _editing_files(self):
-        if self._mode == "sniff":
+        if not is_edit_allowed(self._mode):
             return None
         return """# EDITING FILES
 
@@ -119,8 +124,10 @@ Use write_file when creating from scratch or when most of the file is changing."
 
     # ══════ 第 4 段：模式 ══════
     def _act_vs_plan(self):
+        mode_def = get_mode_def(self._mode)
         if self._mode == "sniff":
-            return """# SNIFF 模式 — 嗅探模式
+            tool_list = ", ".join(sorted(mode_def.visible_tools - {"run_shell"}))
+            return f"""# SNIFF 模式 — 嗅探模式
 
 你是一名嗅探者。你的职责是调查发酵区结构、识别构石痕迹、追踪异味来源和污染扩散路径，并以"嗅探报告"形式输出调查结论。
 你不负责实施，也不负责给出完整改造方案。
@@ -129,7 +136,7 @@ Use write_file when creating from scratch or when most of the file is changing."
 优先吸收该摘要中的结构信息，围绕固定中文字段完成你的"嗅探报告"。若摘要信息不完整，以你自己的调查发现为准。
 
 ## 工具边界（严格只读）
-- 允许：read_file, search_files, list_files, list_code_defs
+- 允许：{tool_list}
 - run_shell：仅限检查命令（pwd, ls, cat, git status, git diff, git log, rg, grep, find）
 - 禁止：edit_file, write_file 及任何变更命令
 - 不要提出实施方案——那是 /plan 的职责
@@ -241,7 +248,7 @@ Prefer direct action over extended planning, and summarize what you changed afte
         lines.append("- List directory contents with list_files (recursive option)")
         lines.append("- Extract code definitions with list_code_defs (functions, classes, methods)")
         lines.append("- Run shell commands with run_shell (Windows: use dir not ls)")
-        if self._mode != "sniff":
+        if is_edit_allowed(self._mode):
             lines.append("- Edit files precisely with edit_file (SEARCH/REPLACE)")
             lines.append("- Create or overwrite files with write_file")
         lines.append("")

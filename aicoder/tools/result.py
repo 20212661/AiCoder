@@ -27,19 +27,62 @@ class ToolResult:
 
     @classmethod
     def ok(cls, tool_name: str, output: str, meta: dict | None = None) -> "ToolResult":
-        return cls(tool_name=tool_name, success=True, output=output, meta=dict(meta or {}))
+        m = dict(meta or {})
+        m.setdefault("success", True)
+        m.setdefault("rejected", False)
+        m.setdefault("tool_name", tool_name)
+        m.setdefault("summary", f"Tool '{tool_name}' succeeded.")
+        m.setdefault("files", [])
+        m.setdefault("recommended_next", "")
+        m.setdefault("error_type", "")
+        return cls(tool_name=tool_name, success=True, output=output, meta=m)
 
     @classmethod
     def fail(cls, tool_name: str, error: str, meta: dict | None = None) -> "ToolResult":
-        return cls(tool_name=tool_name, success=False, error=error, output=error, meta=dict(meta or {}))
+        m = dict(meta or {})
+        m.setdefault("success", False)
+        m.setdefault("rejected", False)
+        m.setdefault("tool_name", tool_name)
+        m.setdefault("error_type", "execution_error")
+        m.setdefault("summary", f"Tool '{tool_name}' failed: {error}")
+        m.setdefault("files", [])
+        m.setdefault("recommended_next", "Check parameters, try a different tool, or retry.")
+        return cls(tool_name=tool_name, success=False, error=error, output=error, meta=m)
 
     @classmethod
     def create_rejected(cls, tool_name: str) -> "ToolResult":
-        return cls(tool_name=tool_name, success=False, rejected=True, error="User rejected the tool call.")
+        return cls(
+            tool_name=tool_name,
+            success=False,
+            rejected=True,
+            error="User rejected the tool call.",
+            meta={
+                "success": False,
+                "rejected": True,
+                "tool_name": tool_name,
+                "error_type": "user_rejected",
+                "summary": f"Tool '{tool_name}' rejected by user.",
+                "files": [],
+                "recommended_next": "Try an alternative approach.",
+            },
+        )
 
     @classmethod
     def blocked(cls, tool_name: str, reason: str) -> "ToolResult":
-        return cls(tool_name=tool_name, success=False, error=reason)
+        return cls(
+            tool_name=tool_name,
+            success=False,
+            error=reason,
+            meta={
+                "success": False,
+                "rejected": False,
+                "tool_name": tool_name,
+                "error_type": "blocked",
+                "summary": f"Tool '{tool_name}' blocked: {reason}",
+                "files": [],
+                "recommended_next": "Resolve the blocking issue or try a different tool.",
+            },
+        )
 
     def to_message(self) -> dict:
         label = "[" + self.tool_name + "]"

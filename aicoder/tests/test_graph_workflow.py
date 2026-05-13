@@ -9,6 +9,7 @@ from aicoder.graph.nodes import (
     route_after_model,
     route_after_observe,
     route_after_permission,
+    route_after_verify,
     route_mode,
 )
 
@@ -35,6 +36,7 @@ class TestGraphCompilation:
             "parse_tool_calls",
             "permission",
             "execute_tool",
+            "verify",
             "observe_tool_result",
             "summarize",
         ]
@@ -48,21 +50,25 @@ class TestGraphCompilation:
 
 
 class TestRouteMode:
-    def test_plan_mode_routes_to_plan(self):
+    def test_plan_mode_routes_to_model(self):
         state = {"mode": "plan"}
-        assert route_mode(state) == "plan"
+        assert route_mode(state) == "model"
 
-    def test_act_mode_routes_to_act(self):
+    def test_act_mode_routes_to_model(self):
         state = {"mode": "act"}
-        assert route_mode(state) == "act"
+        assert route_mode(state) == "model"
 
-    def test_default_routes_to_act(self):
+    def test_sniff_mode_routes_to_model(self):
+        state = {"mode": "sniff"}
+        assert route_mode(state) == "model"
+
+    def test_default_routes_to_model(self):
         state = {"mode": "default"}
-        assert route_mode(state) == "act"
+        assert route_mode(state) == "model"
 
-    def test_empty_mode_routes_to_act(self):
+    def test_empty_mode_routes_to_model(self):
         state = {}
-        assert route_mode(state) == "act"
+        assert route_mode(state) == "model"
 
 
 class TestRouteAfterModel:
@@ -184,3 +190,53 @@ class TestActPathTermination:
 
         assert result["phase"] == "done"
         assert result["loop_count"] == 1
+
+
+class TestRouteAfterVerify:
+    def test_no_decisions_routes_to_continue(self):
+        state = {"recovery_decisions": []}
+        assert route_after_verify(state) == "continue"
+
+    def test_empty_state_routes_to_continue(self):
+        state = {}
+        assert route_after_verify(state) == "continue"
+
+    def test_retry_routes_to_continue(self):
+        state = {
+            "recovery_decisions": [
+                {"action": "retry", "reason": "verification failed", "next_hint": "try a different approach"},
+            ],
+        }
+        assert route_after_verify(state) == "continue"
+
+    def test_fallback_routes_to_continue(self):
+        state = {
+            "recovery_decisions": [
+                {"action": "fallback", "reason": "non-retryable error", "next_hint": "use alternative tool"},
+            ],
+        }
+        assert route_after_verify(state) == "continue"
+
+    def test_halt_routes_to_halt(self):
+        state = {
+            "recovery_decisions": [
+                {"action": "retry", "reason": "verification failed", "next_hint": "retry"},
+                {"action": "halt", "reason": "max retries exceeded", "next_hint": ""},
+            ],
+        }
+        assert route_after_verify(state) == "halt"
+
+    def test_mixed_decisions_with_halt_routes_to_halt(self):
+        state = {
+            "recovery_decisions": [
+                {"action": "retry", "reason": "first failure", "next_hint": "retry"},
+                {"action": "retry", "reason": "second failure", "next_hint": "retry again"},
+                {"action": "halt", "reason": "budget exhausted", "next_hint": ""},
+            ],
+        }
+        assert route_after_verify(state) == "halt"
+
+    def test_graph_compiles_with_conditional_verify_edge(self):
+        """Verify the graph compiles with the new conditional verify->observe edge."""
+        graph = build_agent_graph()
+        assert graph is not None

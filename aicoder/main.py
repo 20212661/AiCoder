@@ -65,7 +65,7 @@ def get_parser():
         "-e",
         default="whole",
         choices=["whole", "diff", "ask", "architect"],
-        help="编辑格式 (默认: whole)",
+        help="编辑格式 — 仅影响系统提示词，不影响运行时路径 (默认: whole)",
     )
     parser.add_argument(
         "--no-git",
