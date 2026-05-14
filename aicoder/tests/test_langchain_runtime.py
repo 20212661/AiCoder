@@ -257,37 +257,18 @@ class TestAgentBuildSafety:
 class TestRuntimeRouting:
     """Verify legacy and langchain runtime paths are isolated."""
 
-    def test_langchain_without_message_returns_none(self):
-        """--runtime langchain without --message should return None and warn."""
-        from unittest.mock import MagicMock, patch
-
-        fake_io = MagicMock()
+    def test_langchain_without_message_enters_interactive(self):
+        """--runtime langchain without --message should enter interactive loop."""
         coder = MagicMock()
-        coder.io = fake_io
+        coder.io = MagicMock()
         coder.runtime = "langchain"
+        coder.show_announcements = MagicMock()
 
-        # Import the module where run() is defined and call the branch logic directly
-        # We test the branch condition without triggering real agent_runtime
-        from aicoder.coders.base_coder import Coder
-
-        # Monkey-patch run to isolate the langchain branch
-        original_run = Coder.run
-
-        # Simulate what run() does for langchain without message
-        runtime = getattr(coder, "runtime", "legacy")
-        assert runtime == "langchain"
-
-        # Without with_message, the branch should warn and return None
-        with_message = None
-        if runtime == "langchain":
-            if not with_message:
-                fake_io.tool_warning("LangChain runtime requires --message")
-                result = None
-            else:
-                result = "text"
-
-        assert result is None
-        fake_io.tool_warning.assert_called_once()
+        with patch("aicoder.langchain_runtime.interactive.run_langchain_interactive", return_value="interactive_done") as mock_interactive:
+            from aicoder.coders.base_coder import Coder
+            result = Coder.run(coder)
+        mock_interactive.assert_called_once_with(coder)
+        assert result == "interactive_done"
 
     def test_langchain_branch_not_entered_for_legacy(self):
         """When runtime is 'legacy', the langchain branch is skipped."""
@@ -662,15 +643,15 @@ class TestSessionPersistence:
         assert coder.done_messages[1] == {"role": "assistant", "content": ""}
         coder._save_session.assert_called_once()
 
-    def test_no_save_without_message(self):
+    def test_no_message_enters_interactive_loop(self):
+        """Calling run() without --message enters the interactive loop."""
         coder = self._make_coder()
 
-        from aicoder.coders.base_coder import Coder
-        result = Coder.run(coder)
-
+        with patch("aicoder.langchain_runtime.interactive.run_langchain_interactive", return_value=None) as mock_interactive:
+            from aicoder.coders.base_coder import Coder
+            result = Coder.run(coder)
+        mock_interactive.assert_called_once_with(coder)
         assert result is None
-        coder._save_session.assert_not_called()
-        assert coder.done_messages == []
 
 
 # ── Hardening: recursion limit, timeout type, runtime init ──
@@ -732,3 +713,202 @@ class TestHardeningRuntimeInit:
         coder = Coder(Model("test-model"), io=MagicMock())
         coder.runtime = "langchain"
         assert coder.runtime == "langchain"
+
+
+# ── Phase 5: persist_langchain_turn ──
+
+
+class TestPersistLangchainTurn:
+    def _make_coder(self, session_id="test-session"):
+        coder = MagicMock()
+        coder.session_id = session_id
+        coder.cur_messages = []
+        coder.done_messages = []
+        coder._first_user_message = None
+        coder._save_session = MagicMock()
+        return coder
+
+    def test_saves_user_and_assistant(self):
+        from aicoder.langchain_runtime.session import persist_langchain_turn
+        coder = self._make_coder()
+        persist_langchain_turn(coder, "hello", "response")
+        assert len(coder.done_messages) == 2
+        assert coder.done_messages[0] == {"role": "user", "content": "hello"}
+        assert coder.done_messages[1] == {"role": "assistant", "content": "response"}
+        assert coder.cur_messages == []
+
+    def test_skips_when_no_session_id(self):
+        from aicoder.langchain_runtime.session import persist_langchain_turn
+        coder = self._make_coder(session_id=None)
+        persist_langchain_turn(coder, "hello", "response")
+        coder._save_session.assert_not_called()
+        assert coder.done_messages == []
+
+    def test_sets_first_user_message_once(self):
+        from aicoder.langchain_runtime.session import persist_langchain_turn
+        coder = self._make_coder()
+        persist_langchain_turn(coder, "first", "r1")
+        assert coder._first_user_message == "first"
+        persist_langchain_turn(coder, "second", "r2")
+        assert coder._first_user_message == "first"
+
+    def test_empty_assistant_text_saved(self):
+        from aicoder.langchain_runtime.session import persist_langchain_turn
+        coder = self._make_coder()
+        persist_langchain_turn(coder, "hello", "")
+        assert coder.done_messages[1] == {"role": "assistant", "content": ""}
+
+    def test_appends_to_existing_history(self):
+        from aicoder.langchain_runtime.session import persist_langchain_turn
+        coder = self._make_coder()
+        coder.done_messages = [{"role": "user", "content": "old"}, {"role": "assistant", "content": "old-r"}]
+        persist_langchain_turn(coder, "new", "new-r")
+        assert len(coder.done_messages) == 4
+
+
+# ── Phase 5: Interactive loop ──
+
+
+class TestLangchainInteractive:
+    def _make_coder(self, session_id="test-session"):
+        coder = MagicMock()
+        coder.io = MagicMock()
+        coder.runtime = "langchain"
+        coder.session_id = session_id
+        coder.done_messages = []
+        coder.cur_messages = []
+        coder._first_user_message = None
+        coder.root = "/tmp"
+        coder.commands = MagicMock()
+        coder.commands.get_commands.return_value = []
+        coder.get_inchat_relative_files = MagicMock(return_value=[])
+        coder.keyboard_interrupt = MagicMock()
+        coder._save_session = MagicMock()
+        return coder
+
+    def test_quit_exits(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["/quit"]
+        from aicoder.langchain_runtime.interactive import run_langchain_interactive
+        result = run_langchain_interactive(coder)
+        assert result is None
+
+    def test_exit_exits(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["/exit"]
+        from aicoder.langchain_runtime.interactive import run_langchain_interactive
+        result = run_langchain_interactive(coder)
+        assert result is None
+
+    def test_clear_clears_history(self):
+        coder = self._make_coder()
+        coder.done_messages = [{"role": "user", "content": "old"}]
+        coder.cur_messages = [{"role": "assistant", "content": "old-r"}]
+        coder.io.get_input.side_effect = ["/clear", "/quit"]
+        from aicoder.langchain_runtime.interactive import run_langchain_interactive
+        run_langchain_interactive(coder)
+        assert coder.done_messages == []
+        assert coder.cur_messages == []
+        coder.io.tool_output.assert_called_with("History cleared.")
+
+    def test_empty_input_skips(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["", "  ", "/quit"]
+        with patch("aicoder.langchain_runtime.agent.run_langchain_agent") as mock_agent:
+            from aicoder.langchain_runtime.interactive import run_langchain_interactive
+            run_langchain_interactive(coder)
+        mock_agent.assert_not_called()
+
+    def test_unsupported_command_warns(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["/model", "/quit"]
+        with patch("aicoder.langchain_runtime.agent.run_langchain_agent") as mock_agent:
+            from aicoder.langchain_runtime.interactive import run_langchain_interactive
+            run_langchain_interactive(coder)
+        mock_agent.assert_not_called()
+        coder.io.tool_warning.assert_called()
+        coder._save_session.assert_not_called()
+
+    def test_normal_message_calls_agent(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["hello", "/quit"]
+        with patch("aicoder.langchain_runtime.agent.run_langchain_agent", return_value="response") as mock_agent:
+            from aicoder.langchain_runtime.interactive import run_langchain_interactive
+            run_langchain_interactive(coder)
+        mock_agent.assert_called_once_with(coder, "hello")
+
+    def test_normal_message_saves_session(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["hello", "/quit"]
+        with patch("aicoder.langchain_runtime.agent.run_langchain_agent", return_value="response"):
+            from aicoder.langchain_runtime.interactive import run_langchain_interactive
+            run_langchain_interactive(coder)
+        coder._save_session.assert_called_once()
+        assert len(coder.done_messages) == 2
+
+    def test_agent_exception_no_save_continue(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = ["hello", "world", "/quit"]
+        with patch("aicoder.langchain_runtime.agent.run_langchain_agent",
+                    side_effect=[RuntimeError("API error"), "response"]):
+            from aicoder.langchain_runtime.interactive import run_langchain_interactive
+            result = run_langchain_interactive(coder)
+        assert result is None
+        coder.io.tool_error.assert_called_once()
+        coder._save_session.assert_called_once()
+        assert len(coder.done_messages) == 2
+
+    def test_eof_exits(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = EOFError()
+        from aicoder.langchain_runtime.interactive import run_langchain_interactive
+        result = run_langchain_interactive(coder)
+        assert result is None
+
+    def test_keyboard_interrupt_during_input(self):
+        coder = self._make_coder()
+        coder.io.get_input.side_effect = [KeyboardInterrupt(), "/quit"]
+        from aicoder.langchain_runtime.interactive import run_langchain_interactive
+        run_langchain_interactive(coder)
+        coder.keyboard_interrupt.assert_called_once()
+
+
+# ── Phase 5: Integration with Coder.run() ──
+
+
+class TestLangchainInteractiveIntegration:
+    def _make_coder(self, session_id="test-session"):
+        coder = MagicMock()
+        coder.io = MagicMock()
+        coder.runtime = "langchain"
+        coder.session_id = session_id
+        coder.main_model = MagicMock()
+        coder.main_model.name = "test-model"
+        coder.done_messages = []
+        coder.cur_messages = []
+        coder._first_user_message = None
+        coder._session_token_in = 0
+        coder._session_token_out = 0
+        coder.edit_format = "whole"
+        coder.root = "/tmp"
+        coder.show_announcements = MagicMock()
+        coder._save_session = MagicMock()
+        return coder
+
+    def test_with_message_uses_persist_turn(self):
+        coder = self._make_coder()
+        with patch("aicoder.langchain_runtime.agent.run_langchain_agent", return_value="response"), \
+             patch("aicoder.langchain_runtime.session.persist_langchain_turn") as mock_persist:
+            from aicoder.coders.base_coder import Coder
+            Coder.run(coder, with_message="hello")
+        mock_persist.assert_called_once_with(coder, "hello", "response")
+
+    def test_legacy_runtime_not_affected(self):
+        coder = self._make_coder()
+        coder.runtime = "legacy"
+        assert getattr(coder, "runtime", "legacy") != "langchain"
+        with patch("aicoder.langchain_runtime.interactive.run_langchain_interactive") as mock_interactive:
+            runtime = getattr(coder, "runtime", "legacy")
+            if runtime == "langchain":
+                mock_interactive(coder)
+        mock_interactive.assert_not_called()

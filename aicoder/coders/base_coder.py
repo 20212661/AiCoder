@@ -300,26 +300,13 @@ class Coder:
         # Experimental LangChain runtime bypass
         if getattr(self, "runtime", "legacy") == "langchain":
             if not with_message:
-                self.io.tool_warning(
-                    "LangChain runtime requires --message for non-interactive use. "
-                    "Use: aicoder --runtime langchain --message \"your question\". "
-                    "For interactive mode, omit --runtime to use the default legacy runtime."
-                )
-                return None
+                from ..langchain_runtime.interactive import run_langchain_interactive
+                return run_langchain_interactive(self)
             from ..langchain_runtime.agent import run_langchain_agent
             text = run_langchain_agent(self, with_message)
             self.io.print_assistant_output(text)
-
-            # Persist conversation turn to session JSON (same pattern as legacy runtime)
-            if self.session_id:
-                self.cur_messages.append(dict(role="user", content=with_message))
-                if not self._first_user_message:
-                    self._first_user_message = with_message
-                self.cur_messages.append(dict(role="assistant", content=text or ""))
-                self.done_messages.extend(self.cur_messages)
-                self.cur_messages = []
-                self._save_session()
-
+            from ..langchain_runtime.session import persist_langchain_turn
+            persist_langchain_turn(self, with_message, text)
             return text
 
         try:

@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — 2026-05-14
+
+### Added
+
+- **CLI interactive mode for LangChain runtime** (`aicoder --runtime langchain`)
+  - Enters interactive loop when `--message` is omitted
+  - `/quit`, `/exit` to exit; `/clear` to clear history
+  - Unsupported slash commands produce a warning without calling the agent
+  - Session JSON persisted after each successful turn via `persist_langchain_turn()`
+  - Agent errors: `tool_error` output, no session save, loop continues
+  - `KeyboardInterrupt` and `EOFError` handled identically to legacy runtime
+- **`aicoder/langchain_runtime/session.py`** — `persist_langchain_turn()` helper extracted from inline code
+- **`aicoder/langchain_runtime/interactive.py`** — `run_langchain_interactive()` CLI interactive loop
+- **17 new tests** (84 total, up from 67) covering interactive loop, session helper, and integration
+
+### Changed
+
+- `base_coder.py` langchain branch: `--message` path now uses `persist_langchain_turn()`; no-message path calls `run_langchain_interactive()` instead of printing a warning
+- Updated `docs/langchain-runtime-status.md` — Phase 5 from planned to implemented; regression matrix updated to 122 tests across 4 files
+
+### Limitations (unchanged)
+
+- TUI `--serve langchain` interactive mode not supported (`rpc_io` loop not adapted)
+- Streaming not supported (synchronous `agent.invoke()`)
+- `interrupt` / `checkpointer` not integrated — next phase entry point
+- Middleware rate-limit / retry modules degrade to no-op (`langchain` version constraint)
+
 ## [0.7.0] — 2025-05-14
 
 ### Added
