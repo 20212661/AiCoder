@@ -22,6 +22,61 @@ jobs:
       - name: Run tests
         run: pytest
 
+  # v1.6.1 gate: core recovery/verification/checkpoint tests
+  tests-core-v16x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: v1.6.x core gate
+        run: >
+          pytest
+          aicoder/tests/test_checkpoint_recovery.py
+          aicoder/tests/test_checkpoint_audit_trace.py
+          aicoder/tests/test_recovery_policy.py
+          aicoder/tests/test_recovery_routing_trace.py
+          aicoder/tests/test_verification_policy.py
+          aicoder/tests/test_verification_runner.py
+          aicoder/tests/test_event_replay.py
+          aicoder/tests/test_graph_workflow.py
+          aicoder/tests/test_debug_modules.py
+          -q
+
+  # v1.3-v1.5 historical regression gate
+  tests-regression-v13-v15:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: v1.3-v1.5 regression gate
+        run: >
+          pytest
+          aicoder/tests/test_agent_runtime.py
+          aicoder/tests/test_coder_init.py
+          aicoder/tests/test_system_prompt.py
+          aicoder/tests/test_agent_events.py
+          aicoder/tests/test_agent_step_store.py
+          aicoder/tests/test_condense.py
+          aicoder/tests/test_context_packer.py
+          -q
+        # NOTE: test_sniffing_recon is a known pre-existing failure
+        # (encoding issue on Windows). Tracked separately. Do NOT add
+        # to this gate.
+
   tui:
     runs-on: ubuntu-latest
     defaults:

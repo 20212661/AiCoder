@@ -15,8 +15,10 @@ from .nodes import (
     route_after_model,
     route_after_observe,
     route_after_permission,
+    route_after_verify,
     route_mode,
     summarize_node,
+    verify_node,
 )
 from .state import AgentGraphState
 
@@ -31,6 +33,7 @@ def build_agent_graph(checkpointer=None):
     graph.add_node("parse_tool_calls", parse_tool_calls)
     graph.add_node("permission", permission_node)
     graph.add_node("execute_tool", execute_tool_node)
+    graph.add_node("verify", verify_node)
     graph.add_node("observe_tool_result", observe_tool_result)
     graph.add_node("summarize", summarize_node)
 
@@ -40,8 +43,7 @@ def build_agent_graph(checkpointer=None):
         "prepare_context",
         route_mode,
         {
-            "plan": "plan",
-            "act": "model",
+            "model": "model",
         },
     )
 
@@ -71,7 +73,17 @@ def build_agent_graph(checkpointer=None):
         },
     )
 
-    graph.add_edge("execute_tool", "observe_tool_result")
+    graph.add_edge("execute_tool", "verify")
+
+    # After verify: halt on unrecoverable failures, else continue
+    graph.add_conditional_edges(
+        "verify",
+        route_after_verify,
+        {
+            "halt": "summarize",
+            "continue": "observe_tool_result",
+        },
+    )
 
     # After observing results: loop back to model or finish
     graph.add_conditional_edges(

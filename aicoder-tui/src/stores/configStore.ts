@@ -1,11 +1,19 @@
 import { create } from "zustand";
 
+export type AppMode = "sniff" | "plan" | "act";
+
+/** True when the mode is read-only (sniff or plan). */
+export function isReadOnlyMode(mode: AppMode): boolean {
+  return mode === "sniff" || mode === "plan";
+}
+
 export interface AppConfig {
   model: string;
-  mode: "sniff" | "plan" | "act";
+  mode: AppMode;
   theme: string;
   showSidebar: boolean;
   showThinking: boolean;
+  /** Derived: true when mode is "plan" or "sniff". Prefer using isReadOnlyMode(mode). */
   planMode: boolean;
   yolo: boolean;
   commands: string[];
@@ -16,12 +24,10 @@ export interface AppConfig {
 
 interface ConfigState extends AppConfig {
   setModel: (model: string) => void;
-  setMode: (mode: "sniff" | "plan" | "act") => void;
-  setPlanMode: (planMode: boolean) => void;
+  setMode: (mode: AppMode) => void;
   setTheme: (theme: string) => void;
   toggleSidebar: () => void;
   toggleThinking: () => void;
-  togglePlanMode: () => void;
   toggleYolo: () => void;
   setCommands: (commands: string[]) => void;
   setAvailableModels: (models: string[]) => void;
@@ -45,10 +51,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ model });
   },
   setMode(mode) {
-    set({ mode, planMode: mode === "plan" || mode === "sniff" });
-  },
-  setPlanMode(planMode) {
-    set({ planMode, mode: planMode ? "plan" : "act" as const });
+    set({ mode, planMode: isReadOnlyMode(mode) });
   },
   setTheme(theme) {
     set({ theme });
@@ -58,9 +61,6 @@ export const useConfigStore = create<ConfigState>((set) => ({
   },
   toggleThinking() {
     set((s) => ({ showThinking: !s.showThinking }));
-  },
-  togglePlanMode() {
-    set((s) => ({ planMode: !s.planMode, mode: !s.planMode ? "plan" : "act" }));
   },
   toggleYolo() {
     set((s) => ({ yolo: !s.yolo }));
@@ -77,13 +77,10 @@ export const useConfigStore = create<ConfigState>((set) => ({
   updateFromBackend(params) {
     const updates: Partial<AppConfig> = {};
     if (params.model && typeof params.model === "string") updates.model = params.model;
+    // mode is the canonical field — always derive planMode from it
     if (params.mode === "sniff" || params.mode === "plan" || params.mode === "act") {
       updates.mode = params.mode;
-      updates.planMode = params.mode === "plan" || params.mode === "sniff";
-    }
-    if (typeof params.planMode === "boolean") updates.planMode = params.planMode;
-    if (!updates.mode && typeof params.planMode === "boolean") {
-      updates.mode = params.planMode ? "plan" : "act";
+      updates.planMode = isReadOnlyMode(params.mode);
     }
     if (typeof params.yolo === "boolean") updates.yolo = params.yolo;
     if (typeof params.phase === "string") updates.phase = params.phase;

@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text, useInput } from "ink";
 import { useApprovalStore } from "../../stores/approvalStore.js";
-import { getBackendApi } from "../hooks/useOfficialBackend.js";
+import { getBackendApi } from "../../hooks/useBackend.js";
 
 export function ApprovalPanel() {
   const pending = useApprovalStore((s) => s.pending);

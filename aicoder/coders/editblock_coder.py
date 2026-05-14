@@ -1,7 +1,13 @@
 """
-差异编辑编码器 - SEARCH/REPLACE diff 格式
-LLM 输出 <<<<<<< SEARCH / ======= / >>>>>>> REPLACE 块，Coder 解析并应用
-参考 Aider 的 editblock_coder.py，包含模糊匹配算法
+差异编辑编码器 — DEPRECATED compatibility layer.
+
+Coder.create() no longer dispatches to subclasses.  The prompts
+(EditBlockPrompts) are still loaded by Coder._apply_edit_format_prompts(),
+but this class and all its methods are unreachable from the AgentRuntime
+execution path.
+
+Retained for: the SEARCH/REPLACE matching algorithms (replace_most_similar_chunk,
+perfect_replace, etc.) may be useful for a non-tool-based fallback.
 """
 import difflib
 import math
@@ -20,7 +26,11 @@ class EditBlockCoder(Coder):
     gpt_prompts = EditBlockPrompts()
 
     def process_response(self):
-        """处理 LLM 响应，解析 SEARCH/REPLACE 块并应用编辑"""
+        """Deprecated legacy hook — not reachable from AgentRuntime path.
+
+        The AgentRuntime + LangGraph pipeline handles response processing
+        through graph nodes (model_node → execute_tool_node → …).
+        """
         content = self.multi_response_content
         if not content:
             return

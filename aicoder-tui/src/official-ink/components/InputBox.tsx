@@ -3,7 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { useChatStore } from "../../stores/chatStore.js";
 import { useApprovalStore } from "../../stores/approvalStore.js";
 import { useConfigStore } from "../../stores/configStore.js";
-import { getBackendApi } from "../hooks/useOfficialBackend.js";
+import { getBackendApi } from "../../hooks/useBackend.js";
 import { SlashCommandMenu, filterCommands } from "./SlashCommandMenu.js";
 import { ModelPicker } from "./ModelPicker.js";
 import { theme } from "../theme.js";

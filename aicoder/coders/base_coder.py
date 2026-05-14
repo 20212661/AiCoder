@@ -18,12 +18,15 @@ class Coder:
 
     def __init__(self, main_model: Model, io: InputOutput | None = None, fnames: list[str] | None = None,
                  verbose: bool = False, stream: bool = True, auto_commits: bool = True,
-                 map_tokens: int = 1024, session_id: str | None = None) -> None:
+                 map_tokens: int = 1024, session_id: str | None = None,
+                 edit_format: str | None = None) -> None:
         if not fnames: fnames = []
         if io is None: io = InputOutput()
         self.io = io; self.main_model = main_model
         self.verbose = verbose; self.stream = stream and main_model.streaming
         self.auto_commits = auto_commits; self.map_tokens = map_tokens
+        self.edit_format = edit_format or "whole"
+        self._apply_edit_format_prompts()
         self.abs_fnames = set(); self.abs_read_only_fnames = set()
         self.cur_messages = []; self.done_messages = []
         self.partial_response_content = ""; self.multi_response_content = ""
@@ -37,6 +40,7 @@ class Coder:
         self._session_token_in = 0
         self._session_token_out = 0
         self._approval = None  # Set by main.py after loading settings
+        self.runtime = "legacy"  # Overridden by main.py if --runtime langchain
         self._cached_system_messages = None
         self._cached_system_key = None  # (model_name, mode) tuple
         self._init_tool_system()
@@ -138,23 +142,28 @@ class Coder:
         if not paths: return os.getcwd()
         return str(Path(os.path.commonpath([Path(p).parent for p in paths])))
 
+    def _apply_edit_format_prompts(self):
+        """Select prompts based on edit_format — prompt-only, no runtime dispatch."""
+        from .wholefile_prompts import WholeFilePrompts
+        from .editblock_prompts import EditBlockPrompts
+        from .ask_prompts import AskPrompts
+        from .architect_prompts import ArchitectPrompts
+        _prompt_map = {
+            "whole": WholeFilePrompts,
+            "diff": EditBlockPrompts,
+            "ask": AskPrompts,
+            "architect": ArchitectPrompts,
+        }
+        prompt_cls = _prompt_map.get(self.edit_format, WholeFilePrompts)
+        self.gpt_prompts = prompt_cls()
+
     @classmethod
     def create(cls, main_model: Model | None = None, edit_format: str | None = None,
                io: InputOutput | None = None, **kwargs: Any) -> "Coder":
+        """Factory: always returns base Coder. edit_format selects prompts, not subclass."""
         if not main_model: main_model = Model(DEFAULT_MODEL_NAME)
         if edit_format is None: edit_format = main_model.edit_format or "whole"
-        from .wholefile_coder import WholeFileCoder
-        from .editblock_coder import EditBlockCoder
-        from .ask_coder import AskCoder
-        from .architect_coder import ArchitectCoder
-        coder_classes = {
-            "whole": WholeFileCoder,
-            "diff": EditBlockCoder,
-            "ask": AskCoder,
-            "architect": ArchitectCoder,
-        }
-        coder_cls = coder_classes.get(edit_format, WholeFileCoder)
-        return coder_cls(main_model, io, **kwargs)
+        return cls(main_model, io, edit_format=edit_format, **kwargs)
 
     def abs_root_path(self, path: str) -> str:
         if path in self.abs_root_path_cache: return self.abs_root_path_cache[path]
@@ -281,7 +290,38 @@ class Coder:
         return None
 
     def run(self, with_message: str | None = None) -> str | None:
+        """Sole entry point for user turns — delegates to AgentRuntime.
+
+        When runtime == "langchain", uses the experimental LangChain agent.
+        Otherwise delegates to the existing AgentRuntime + LangGraph pipeline.
+        """
         self.show_announcements()
+
+        # Experimental LangChain runtime bypass
+        if getattr(self, "runtime", "legacy") == "langchain":
+            if not with_message:
+                self.io.tool_warning(
+                    "LangChain runtime requires --message for non-interactive use. "
+                    "Use: aicoder --runtime langchain --message \"your question\". "
+                    "For interactive mode, omit --runtime to use the default legacy runtime."
+                )
+                return None
+            from ..langchain_runtime.agent import run_langchain_agent
+            text = run_langchain_agent(self, with_message)
+            self.io.print_assistant_output(text)
+
+            # Persist conversation turn to session JSON (same pattern as legacy runtime)
+            if self.session_id:
+                self.cur_messages.append(dict(role="user", content=with_message))
+                if not self._first_user_message:
+                    self._first_user_message = with_message
+                self.cur_messages.append(dict(role="assistant", content=text or ""))
+                self.done_messages.extend(self.cur_messages)
+                self.cur_messages = []
+                self._save_session()
+
+            return text
+
         try:
             if with_message:
                 from ..agent_runtime import _create_runtime
@@ -334,13 +374,20 @@ class Coder:
         r = self.repo.commit(fnames=None, aider_edits=True, coder=self)
         if r: self.aider_commit_hashes.add(r[0])
 
-    def process_response(self): pass
+    def process_response(self):
+        """Deprecated legacy hook — never called in the AgentRuntime path.
+
+        Subclass overrides (WholeFileCoder, EditBlockCoder, AskCoder) exist
+        for backwards compatibility but are unreachable from the current
+        execution pipeline (AgentRuntime + LangGraph handles everything
+        through graph nodes).
+        """
+        pass
 
     def show_announcements(self):
         from .. import __version__
         self.io.tool_output("AiCoder v" + __version__)
-        ml = "PLAN" if self.tool_exec_state.is_plan_mode else "ACT"
-        self.io.tool_output("Model: " + self.main_model.name + " [" + str(self.edit_format) + "]  Mode: " + ml)
+        self.io.tool_output("Model: " + self.main_model.name + " [" + str(self.edit_format) + "]  Mode: " + self.tool_exec_state.mode.upper())
 
     def keyboard_interrupt(self):
         now = time.time()

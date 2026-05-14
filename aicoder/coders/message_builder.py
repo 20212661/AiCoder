@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Message formatting helpers extracted from base_coder."""
+"""Message formatting helpers extracted from base_coder.
+
+NOTE: The final message assembly is now orchestrated by
+``aicoder.context.packer.pack_context()``.  The functions here
+remain as low-level building blocks.  Do not call ``format_messages()``
+directly in new code — use ``pack_context()`` instead.
+"""
 
 import os
 from datetime import datetime

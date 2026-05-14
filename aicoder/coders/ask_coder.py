@@ -1,6 +1,13 @@
 """
-Ask Coder - 只读问答模式，不编辑代码
-显式拦截一切文件写入操作，不依赖提示词约束
+Ask Coder — DEPRECATED compatibility layer.
+
+Coder.create() no longer dispatches to subclasses.  The prompts
+(AskPrompts) are still loaded by Coder._apply_edit_format_prompts(),
+but this class and all its methods are unreachable from the AgentRuntime
+execution path.
+
+Retained for: potential future use of the edit-interception logic
+(apply_edits override) if a non-tool-based fallback is needed.
 """
 from .base_coder import Coder
 from .ask_prompts import AskPrompts
@@ -18,7 +25,11 @@ class AskCoder(Coder):
     gpt_prompts = AskPrompts()
 
     def process_response(self):
-        """处理 LLM 响应：扫描编辑尝试并拒绝"""
+        """Deprecated legacy hook — not reachable from AgentRuntime path.
+
+        The AgentRuntime + LangGraph pipeline handles response processing
+        through graph nodes (model_node → execute_tool_node → …).
+        """
         content = self.multi_response_content
         if not content:
             return

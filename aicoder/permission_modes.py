@@ -1,8 +1,22 @@
-"""Mode-aware tool permission helpers."""
+"""Mode-aware tool permission helpers.
+
+All mode semantics are derived from ``aicoder.modes.config`` — the single
+source of truth.  This module provides the permission decision logic
+that the graph permission_node and ToolExecutor consult.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+
+from .modes.config import (
+    FILE_EDIT_TOOLS,
+    get_mode_config,
+    is_read_only_mode,
+)
+from .mode_definitions import (
+    get_visible_tools,
+)
 
 if TYPE_CHECKING:
     from .approval import ApprovalController
@@ -12,16 +26,9 @@ if TYPE_CHECKING:
 PermissionMode = Literal["sniff", "plan", "act"]
 PermissionBehavior = Literal["allow", "ask", "deny"]
 
-READ_ONLY_TOOLS = frozenset({
-    "read_file",
-    "search_files",
-    "list_files",
-    "list_code_defs",
-})
-PLAN_MODE_VISIBLE_TOOLS = frozenset((*READ_ONLY_TOOLS, "run_shell"))
+# Re-export for backward compatibility
+PLAN_MODE_VISIBLE_TOOLS = get_mode_config("plan").visible_tools
 PLAN_MODE_ALLOWED_TOOLS = PLAN_MODE_VISIBLE_TOOLS
-FILE_EDIT_TOOLS = frozenset({"edit_file", "write_file"})
-ACT_MODE_AUTO_APPROVED_TOOLS: frozenset[str] = frozenset()
 ACT_MODE_AUTO_APPROVED_COMMANDS = frozenset({
     "mkdir",
     "touch",
@@ -43,9 +50,9 @@ def get_visible_tool_specs(
     tools: list["ToolSpec"],
     mode: PermissionMode,
 ) -> list["ToolSpec"]:
-    if mode in ("plan", "sniff"):
-        return [tool for tool in tools if tool.name in PLAN_MODE_VISIBLE_TOOLS]
-    return list(tools)
+    """Filter tool specs to only those visible in the given mode."""
+    visible = get_visible_tools(mode)
+    return [tool for tool in tools if tool.name in visible]
 
 
 def can_use_tool_in_mode(
@@ -54,45 +61,43 @@ def can_use_tool_in_mode(
     context: ToolPermissionContext,
     approval: "ApprovalController | None" = None,
 ) -> PermissionDecision:
+    """Decide whether a tool call is allowed in the current mode."""
     params = params or {}
+    cfg = get_mode_config(context.mode)
 
-    if context.mode in ("plan", "sniff"):
+    # Read-only modes (sniff, plan): deny file edits, restrict shell
+    if not cfg.editable:
         if tool_name in FILE_EDIT_TOOLS:
-            mode_label = "SNIFF" if context.mode == "sniff" else "PLAN"
             return PermissionDecision(
                 behavior="deny",
                 reason=(
-                    f"{mode_label} MODE is read-only. Use read_file, search_files, "
-                    "list_files, list_code_defs, or /act to implement changes."
+                    f"{cfg.label} MODE is read-only. "
+                    "Use read_file, search_files, list_files, list_code_defs, "
+                    "run_shell (read-only), or switch to /act to implement changes."
                 ),
             )
         if tool_name == "run_shell":
             command = params.get("command", "")
-            if _is_plan_safe_shell_command(command, approval):
+            if _is_safe_shell_command(command, approval):
                 return PermissionDecision(
                     behavior="allow",
-                    reason="read-only mode allows inspection shell commands",
+                    reason=f"{cfg.label} mode allows inspection shell commands",
                 )
-            mode_label = "SNIFF" if context.mode == "sniff" else "PLAN"
             return PermissionDecision(
                 behavior="deny",
                 reason=(
-                    f"{mode_label} MODE only allows read-only shell inspection commands. "
+                    f"{cfg.label} MODE only allows read-only shell inspection commands. "
                     "Switch to /act before running mutating shell commands."
                 ),
             )
-        if tool_name in PLAN_MODE_ALLOWED_TOOLS:
+        if tool_name in cfg.visible_tools:
             return PermissionDecision(
                 behavior="allow",
                 reason="read-only mode allows exploration tools",
             )
 
+    # Act mode: allow with approval checks
     if context.mode == "act":
-        if tool_name in ACT_MODE_AUTO_APPROVED_TOOLS:
-            return PermissionDecision(
-                behavior="allow",
-                reason="act mode allows direct file edits",
-            )
         if tool_name == "run_shell":
             command = (params.get("command", "") or "").strip()
             base_cmd = command.split()[0].lower() if command else ""
@@ -109,10 +114,11 @@ def can_use_tool_in_mode(
     return PermissionDecision(behavior="ask", reason="")
 
 
-def _is_plan_safe_shell_command(
+def _is_safe_shell_command(
     command: str,
     approval: "ApprovalController | None",
 ) -> bool:
+    """Check if a shell command is safe for read-only modes."""
     command = (command or "").strip()
     if not command or approval is None:
         return False

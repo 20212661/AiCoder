@@ -8,7 +8,7 @@
 2. 前端 `official-ink` 与 `legacy ink` 双运行时并存的问题
 3. 系统提示词、模式语义、权限规则分散导致的行为漂移问题
 
-本文档不是“建议清单”，而是“可执行的修复规格”。执行方应严格按本文档实施，并在完成后提交可验证结果。
+本文档是“可执行修复规格”，不是泛泛建议。执行方必须按本文档的步骤、命令、范围和验收标准实施。
 
 ---
 
@@ -101,7 +101,48 @@
 
 ---
 
-## 5. 里程碑拆分
+## 5. Claude Code 全自动模式执行约束
+
+本说明书将用于 Claude Code 全自动模式，因此必须额外遵守以下约束。
+
+### 5.1 通用执行规则
+
+1. 每个里程碑开始前，先做只读检查，不要一上来直接删代码
+2. 每次修改只允许触碰当前里程碑列出的文件范围
+3. 如果需要扩大修改范围，先记录新增文件及原因，再继续修改
+4. 删除代码前，先运行搜索命令确认调用点
+5. 一次只完成一个里程碑，不要把 M1、M2、M3 混成一个大改动
+6. 每个里程碑结束后，先跑该里程碑规定的测试，再进入下一个里程碑
+
+### 5.2 禁止事项
+
+1. 不要使用 `git reset --hard`
+2. 不要使用 `git checkout -- .`
+3. 不要批量删除整个目录，除非文档明确要求且已确认无引用
+4. 不要先全局替换再看结果
+5. 不要在未确认调用图前删除 legacy 代码
+6. 不要因为“怕破坏”而新加第三套兼容层
+
+### 5.3 固定执行模板
+
+每个里程碑都必须遵循：
+
+1. 运行“里程碑预检查命令”
+2. 汇总命中结果
+3. 只修改该里程碑列出的文件
+4. 运行“里程碑验收命令”
+5. 记录改动文件清单和测试结果
+6. 通过后再进入下一个里程碑
+
+### 5.4 大范围修改安全阈值
+
+1. 如果某次删除动作会影响超过 10 个文件，先暂停并重新汇总引用
+2. 如果某次修改要跨后端和前端两个目录，先确认是否属于当前里程碑范围
+3. 若发现工作树已有无关改动，不要覆盖它们
+
+---
+
+## 6. 里程碑拆分
 
 本次修复拆分为三个主里程碑和一个收尾里程碑：
 
@@ -112,9 +153,9 @@
 
 ---
 
-## 6. M1：后端运行时收口
+## 7. M1：后端运行时收口
 
-## 6.1 目标
+## 7.1 目标
 
 让后端只保留一条正式执行路径：
 
@@ -124,7 +165,7 @@
 
 旧 `Coder` 主循环只能作为临时兼容层，最终应从默认路径彻底退出。
 
-## 6.2 涉及文件
+## 7.2 允许修改的文件范围
 
 - `aicoder/coders/base_coder.py`
 - `aicoder/agent_runtime.py`
@@ -138,8 +179,32 @@
 - `aicoder/tests/test_coder_init.py`
 - `aicoder/tests/test_agent_runtime.py`
 - `aicoder/tests/test_graph_workflow.py`
+- `aicoder/tests/test_graph_act.py`
+- `aicoder/tests/test_graph_permissions.py`
+- `aicoder/tests/test_rpc_e2e.py`
 
-## 6.3 必做改动
+M1 中默认禁止修改：
+
+- `aicoder-tui/**`
+- `docs/**` 中除本说明书提到的架构文档外的其他文件
+
+## 7.3 里程碑预检查命令
+
+先运行以下只读命令，保存输出结论后再开始改代码：
+
+```powershell
+rg -n "AgentRuntime|_create_runtime|run_user_turn|_send_message_inner|_process_tool_calls|edit_format|whole|diff|ask|architect" aicoder/coders aicoder/main.py aicoder/agent_runtime.py
+rg -n "tool_exec_state.mode|set_mode\\(|/plan|/act|/sniff" aicoder
+pytest aicoder/tests/test_agent_runtime.py aicoder/tests/test_graph_workflow.py aicoder/tests/test_coder_init.py
+```
+
+执行要求：
+
+1. 先确认 `AgentRuntime` 真实入口在哪里
+2. 先确认旧主循环是否还有可达调用点
+3. 先确认 `edit_format` 是否仍参与运行时分流
+
+## 7.4 必做改动
 
 ### 任务 M1-1：明确运行时主入口
 
@@ -200,7 +265,16 @@
 - 不允许不同入口对模式含义有不同解释
 - `main.py`、`commands.py`、`rpc_io.py`、graph state 应保持一致
 
-## 6.4 验收标准
+## 7.5 建议修改顺序
+
+按以下顺序进行，避免误删：
+
+1. 先改 `aicoder/coders/base_coder.py` 中的主入口委托关系
+2. 再清理旧主循环相关私有方法
+3. 再把仍有价值的逻辑迁移到 `aicoder/graph/nodes.py`
+4. 最后修正测试与文档
+
+## 7.6 验收标准
 
 - CLI 对话路径统一走 `AgentRuntime`
 - `--serve` 路径统一走 `AgentRuntime`
@@ -208,7 +282,7 @@
 - `act` 模式可以调用工具并完成循环
 - 中断恢复流程可继续执行，不会丢 session
 
-## 6.5 必跑验证
+## 7.7 里程碑验收命令
 
 执行方完成后必须至少跑：
 
@@ -223,13 +297,13 @@ pytest aicoder/tests/test_rpc_e2e.py
 
 ---
 
-## 7. M2：前端运行时收口
+## 8. M2：前端运行时收口
 
-## 7.1 目标
+## 8.1 目标
 
 让 `official-ink` 成为唯一正式运行时，避免双份 UI 实现长期共存。
 
-## 7.2 涉及文件
+## 8.2 允许修改的文件范围
 
 - `aicoder-tui/src/index.tsx`
 - `aicoder-tui/src/App.tsx`
@@ -240,8 +314,37 @@ pytest aicoder/tests/test_rpc_e2e.py
 - `aicoder-tui/src/official-ink/hooks/useOfficialBackend.ts`
 - `aicoder-tui/src/stores/**`
 - `aicoder-tui/package.json`
+- `aicoder-tui/docs/**`
 
-## 7.3 必做改动
+M2 中默认禁止修改：
+
+- `aicoder/**`
+- `aicoder/tests/**`
+
+如果前端构建被后端协议定义阻塞，允许最小范围修改：
+
+- `aicoder/rpc_io.py`
+- `aicoder-tui/src/rpc/protocol.ts`
+
+但必须在交付说明中单独列出原因。
+
+## 8.3 里程碑预检查命令
+
+先运行以下只读命令：
+
+```powershell
+rg -n "AICODER_TUI_RUNTIME|legacy|official-ink|useBackend|useOfficialBackend|ModelPicker|PlanBlock|SlashCommandMenu|ApprovalPanel|ChatView|MessageBlock|StatusBar" aicoder-tui/src aicoder-tui/package.json
+cd aicoder-tui
+npm run typecheck
+```
+
+执行要求：
+
+1. 先列出 legacy 分流入口
+2. 先列出重复组件文件
+3. 先列出 backend hook 的重复入口
+
+## 8.4 必做改动
 
 ### 任务 M2-1：确定唯一运行时
 
@@ -274,7 +377,7 @@ pytest aicoder/tests/test_rpc_e2e.py
 要求：
 
 - 每类组件只能有一份正式实现
-- 若存在“shared”逻辑，提取到公共目录
+- 若存在 shared 逻辑，提取到公共目录
 - 若某份实现仅为 legacy 服务，应删除
 
 ### 任务 M2-3：后端连接逻辑去重
@@ -300,7 +403,7 @@ pytest aicoder/tests/test_rpc_e2e.py
 要求：
 
 - `chatStore / approvalStore / configStore` 为唯一状态事实源
-- 运行时组件不能额外持有另一套“长期状态”
+- 运行时组件不能额外持有另一套长期状态
 - 避免 official/legacy 分别维护自己的连接状态、模式状态、审批队列
 
 ### 任务 M2-5：脚本与文档同步
@@ -311,14 +414,25 @@ pytest aicoder/tests/test_rpc_e2e.py
 - 如果已经完成收口，应直接删除 legacy 脚本
 - README 与 docs 必须同步更新为“唯一运行时”
 
-## 7.4 验收标准
+## 8.5 建议修改顺序
+
+按以下顺序执行：
+
+1. 先统一 backend hook
+2. 再统一入口 `src/index.tsx`
+3. 再去重组件
+4. 最后删除 legacy 脚本和遗留引用
+
+不要先删整个 `src/ink/**` 目录，必须先确认是否仍被 import。
+
+## 8.6 验收标准
 
 - 启动 TUI 时只存在一套受支持 UI 路径
 - 模型选择、计划块、审批面板、消息渲染等核心能力只维护一套组件
 - backend hook 只有一套
 - 删除 legacy 后，typecheck 和 build 仍通过
 
-## 7.5 必跑验证
+## 8.7 里程碑验收命令
 
 ```powershell
 cd aicoder-tui
@@ -339,9 +453,9 @@ npm run test
 
 ---
 
-## 8. M3：模式语义、权限、提示词统一
+## 9. M3：模式语义、权限、提示词统一
 
-## 8.1 目标
+## 9.1 目标
 
 建立单一事实源，使以下内容严格一致：
 
@@ -352,7 +466,7 @@ npm run test
 - UI 中的模式文案
 - system prompt 中的模式说明
 
-## 8.2 涉及文件
+## 9.2 允许修改的文件范围
 
 - `aicoder/permission_modes.py`
 - `aicoder/tools/system_prompt.py`
@@ -365,8 +479,30 @@ npm run test
 - `aicoder-tui/src/components/**`
 - `README.md`
 - `aicoder/docs/permission-matrix.md`
+- 新增一个统一模式定义模块
 
-## 8.3 必做改动
+M3 中禁止做大规模目录迁移。本里程碑只允许：
+
+- 新增一个集中模式定义模块
+- 修改引用方接入这个模块
+- 补测试
+
+## 9.3 里程碑预检查命令
+
+先运行以下只读命令：
+
+```powershell
+rg -n "sniff|plan|act|read-only|SNIFF MODE|PLAN MODE|ACT MODE|safe command|is_command_safe|ACT_MODE_AUTO_APPROVED_COMMANDS|PLAN_MODE_ALLOWED_TOOLS" aicoder aicoder-tui/src README.md
+pytest aicoder/tests/test_permission_modes.py aicoder/tests/test_system_prompt.py aicoder/tests/test_approval.py
+```
+
+执行要求：
+
+1. 先找出模式定义散落的位置
+2. 先找出 shell 安全规则散落的位置
+3. 先找出 UI 与后端状态文案的映射点
+
+## 9.4 必做改动
 
 ### 任务 M3-1：定义模式规范源
 
@@ -430,13 +566,21 @@ npm run test
 - `rpc/protocol.ts` 中的状态字段定义与后端通知一致
 - 文案不要出现“Plan Mode”与“read-only mode”说法混乱的情况
 
-## 8.4 验收标准
+## 9.5 建议修改顺序
+
+1. 先提取统一模式定义
+2. 再改 `permission_modes.py`
+3. 再改 `system_prompt.py`
+4. 再改 `message_builder.py`
+5. 最后对齐 TUI 展示与文档
+
+## 9.6 验收标准
 
 - 同一个模式在代码、提示词、UI、文档中没有冲突描述
 - 添加一个新模式字段时，只需改一处定义，其余自动派生或最小同步
 - shell 权限规则可以通过测试明确验证
 
-## 8.5 必跑验证
+## 9.7 里程碑验收命令
 
 ```powershell
 pytest aicoder/tests/test_permission_modes.py
@@ -448,13 +592,36 @@ pytest aicoder/tests/test_rpc_io.py
 
 ---
 
-## 9. M4：文档、测试、回归收尾
+## 10. M4：文档、测试、回归收尾
 
-## 9.1 目标
+## 10.1 目标
 
 确保“代码现实”与“项目说明”一致，避免收口完成后又被误导回旧路径。
 
-## 9.2 必做改动
+## 10.2 允许修改的文件范围
+
+- `README.md`
+- `docs/**`
+- `aicoder/docs/**`
+- 必要的测试文件
+- 小范围阻塞性修补文件
+
+M4 中禁止继续做大规模架构调整。M4 只允许：
+
+- 文档对齐
+- 补测试
+- 小范围修补阻塞性问题
+
+## 10.3 里程碑预检查命令
+
+```powershell
+git diff --stat
+pytest aicoder/tests/test_rpc_e2e.py aicoder/tests/test_rpc_io.py
+cd aicoder-tui
+npm run typecheck
+```
+
+## 10.4 必做改动
 
 ### 任务 M4-1：更新 README
 
@@ -487,42 +654,38 @@ README 必须明确写清：
 8. TUI 模型切换
 9. `--serve` 启动和 round trip
 
+## 10.5 里程碑验收命令
+
+```powershell
+pytest
+cd aicoder-tui
+npm run typecheck
+npm run build
+```
+
 ---
 
-## 10. 最终交付要求
+## 11. 最终交付要求
 
 执行方交付时必须提供以下内容：
 
-### 10.1 代码交付
+### 11.1 代码交付
 
 - 所有改动文件列表
 - 删除了哪些 legacy 入口
 - 保留了哪些兼容层以及原因
 
-### 10.2 测试交付
+### 11.2 测试交付
 
 - 实际执行过的命令
 - 通过结果
 - 若有跳过项，必须说明原因
 
-### 10.3 说明交付
+### 11.3 说明交付
 
 - 本次收口后的唯一主链说明
 - 仍未解决的遗留问题列表
 - 下一阶段建议，但不能把本次未完成工作伪装成“后续优化”
-
----
-
-## 11. AI 执行限制
-
-交给另一个 AI 执行时，必须附带以下约束：
-
-1. 不要只写方案，必须实际改代码
-2. 不要保留“以后再删”的双份实现，除非文档明确允许临时兼容
-3. 不要新增第三套抽象层
-4. 不要通过增加配置开关来回避收口
-5. 删除 legacy 代码前，先确认无测试依赖
-6. 每完成一个里程碑，就补对应测试与文档
 
 ---
 
@@ -543,7 +706,27 @@ README 必须明确写清：
 
 ---
 
-## 13. 验收口径
+## 13. 可直接交给 Claude Code 的执行提示
+
+可将下面这段直接作为自动执行提示词的一部分：
+
+```text
+按 docs/architecture-consolidation-remediation-spec.md 执行。
+
+严格一次只做一个里程碑。
+每个里程碑开始前先运行文档里的“里程碑预检查命令”。
+只允许修改该里程碑列出的文件范围。
+不要新增第三套兼容层。
+不要通过增加配置开关来绕过收口。
+删除 legacy 代码前先用 rg 确认引用。
+每完成一个里程碑就先跑该里程碑的验收命令。
+如果某次删除会影响超过 10 个文件，先暂停并重新汇总引用再继续。
+如果需要超出文档范围改文件，先记录原因再动手。
+```
+
+---
+
+## 14. 验收口径
 
 我后续验收时将重点检查以下内容：
 

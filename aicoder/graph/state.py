@@ -37,6 +37,13 @@ class ToolObservation(TypedDict, total=False):
     output: str
     error: str
     rejected: bool
+    # v1.2: structured fields for condensation and observability
+    tool_call_id: str
+    error_type: str
+    summary: str
+    recommended_next: str
+    files: list[str]
+    iteration: int
 
 
 # Module-level coder registry — keeps Coder instances out of serializable state
@@ -72,3 +79,11 @@ class AgentGraphState(TypedDict, total=False):
     error: str
     loop_count: int
     max_loops: int
+    runner_type: str
+    verification_results: list[dict[str, Any]]
+    recovery_decisions: list[dict[str, Any]]
+    last_recovery_route: dict[str, Any]
+    # v1.7: Session Federation fields (optional — absent when no federation)
+    task_thread_id: str
+    federation_context: str
+    federation_trace: dict[str, Any]

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { MainLayout } from "./layout/MainLayout.js";
-import { useOfficialBackend, getBackendApi } from "./hooks/useOfficialBackend.js";
+import { useBackend, getBackendApi } from "../hooks/useBackend.js";
 import { useChatStore } from "../stores/chatStore.js";
 
 type AppState = "connecting" | "ready" | "error";
@@ -9,7 +9,7 @@ type AppState = "connecting" | "ready" | "error";
 export function App() {
   const [state, setState] = useState<AppState>("connecting");
   const [errorMsg, setErrorMsg] = useState("");
-  const { connect, disconnect } = useOfficialBackend();
+  const { connect, disconnect } = useBackend();
   const { exit } = useApp();
 
   useEffect(() => {

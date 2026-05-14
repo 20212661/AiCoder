@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useRef, useCallback } from "react";
 import { RpcClient } from "../rpc/client.js";
 import { createBackendApi } from "../rpc/methods.js";
 import { useChatStore } from "../stores/chatStore.js";
@@ -41,9 +41,6 @@ export function useBackend() {
 
     rpc.on("tool/call_started", (params: { tool: string; args: Record<string, unknown> }) => {
       const store = useChatStore.getState();
-      // Clear streaming text to avoid duplication — backend's finalize_streaming
-      // will create the text block. Calling finalizeStream here would cause a
-      // duplicate block because backend also sends finalize after tool execution.
       if (store.isStreaming && store.streamingText) {
         useChatStore.setState({ streamingText: "" });
       }
@@ -89,7 +86,6 @@ export function useBackend() {
     });
 
     rpc.on("tool/output", (params: { message: string; bold?: boolean }) => {
-      // tool/output carries tool execution results — display as info in the current assistant message
       const store = useChatStore.getState();
       if (params.message) {
         store.addToolOutput(params.message);
@@ -102,19 +98,46 @@ export function useBackend() {
       }
     });
 
-    // Forward backend stderr to console for debugging (don't show as chat errors)
     rpc.on("stderr", (data: string) => {
       const line = data.trim();
       if (line) {
-        // Only surface actual errors (✗ marker) to the user, not debug logs
-        if (line.includes("[rpc] recv:") || line.includes("[DBG]") || line.includes("[rpc] read_loop") || line.includes("[rpc] serve") || line.includes("[rpc] got input") || line.includes("[rpc] calling") || line.includes("[rpc] coder.run")) {
-          return; // suppress verbose debug output
+        if (
+          line.includes("[rpc] recv:") ||
+          line.includes("[DBG]") ||
+          line.includes("[rpc] read_loop") ||
+          line.includes("[rpc] serve") ||
+          line.includes("[rpc] got input") ||
+          line.includes("[rpc] calling") ||
+          line.includes("[rpc] coder.run")
+        ) {
+          return;
         }
-        // Only show real errors
         if (line.startsWith("✗") || line.includes("CRASHED") || line.includes("ERROR")) {
           useChatStore.getState().addErrorMessage(line);
         }
       }
+    });
+
+    rpc.on("close", (_code: number, intentional: boolean) => {
+      // Intentional disconnect (user quit) — clean up silently.
+      // Unexpected close (backend crash) — surface error to user.
+      if (intentional) {
+        rpcRef.current = null;
+        rpcInstance = null;
+        apiRef.current = null;
+        apiInstance = null;
+        return;
+      }
+      const store = useChatStore.getState();
+      if (store.isStreaming) {
+        store.finalizeStream("");
+      }
+      store.addErrorMessage("Backend process exited unexpectedly. Restart to continue.");
+      useConfigStore.getState().updateFromBackend({ phase: "disconnected" });
+      rpcRef.current = null;
+      rpcInstance = null;
+      apiRef.current = null;
+      apiInstance = null;
     });
 
     await rpc.connect();
@@ -128,30 +151,12 @@ export function useBackend() {
     apiRef.current = null;
   }, []);
 
-  useEffect(() => {
-    return () => {
-      disconnect();
-    };
-  }, [disconnect]);
-
-  const getRpc = useCallback(() => rpcRef.current, []);
   const getApi = useCallback(() => apiRef.current, []);
 
-  return {
-    connect,
-    disconnect,
-    getRpc,
-    getApi,
-  };
-}
-
-export function getRpcClient(): RpcClient | null {
-  return rpcInstance;
+  return { connect, disconnect, getApi };
 }
 
 export function getBackendApi(): BackendApi | null {
-  // First try the module-level variable (fast path)
   if (apiInstance) return apiInstance;
-  // Fall back to rpcInstance
   return rpcInstance ? createBackendApi(rpcInstance) : null;
 }
