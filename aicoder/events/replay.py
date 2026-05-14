@@ -258,3 +258,62 @@ def _replay_tool_messages(
                 })
 
     return messages
+
+
+def replay_federation_trace(
+    events: list[AgentEventRecord],
+) -> dict[str, Any]:
+    """Reconstruct federation trace from events.
+
+    Returns a structured dict showing which sessions were linked, which were
+    used for restore, which were skipped, and why.
+
+    Keys: started, task_thread_id, linked_sessions, linked_count,
+          restored, sessions_used, sessions_skipped, skipped, skip_reason,
+          goals_count, decisions_count, open_loops_count, files_count
+    """
+    result: dict[str, Any] = {
+        "started": False,
+        "task_thread_id": "",
+        "linked_sessions": [],
+        "linked_count": 0,
+        "restored": False,
+        "sessions_used": [],
+        "sessions_skipped": [],
+        "skipped": False,
+        "skip_reason": "",
+        "goals_count": 0,
+        "decisions_count": 0,
+        "open_loops_count": 0,
+        "files_count": 0,
+    }
+
+    for ev in events:
+        if ev.kind == "federation_started":
+            result["started"] = True
+            result["task_thread_id"] = ev.payload.get("task_thread_id", "")
+            result["linked_session_count"] = ev.payload.get("linked_session_count", 0)
+
+        elif ev.kind == "federation_session_linked":
+            linked_id = ev.payload.get("linked_session_id", "")
+            role = ev.payload.get("role", "")
+            result["linked_sessions"].append({
+                "session_id": linked_id,
+                "role": role,
+            })
+
+        elif ev.kind == "federation_restored":
+            result["restored"] = True
+            result["sessions_used"] = ev.payload.get("sessions_used", [])
+            result["sessions_skipped"] = ev.payload.get("sessions_skipped", [])
+            result["goals_count"] = ev.payload.get("goals_count", 0)
+            result["decisions_count"] = ev.payload.get("decisions_count", 0)
+            result["open_loops_count"] = ev.payload.get("open_loops_count", 0)
+            result["files_count"] = ev.payload.get("files_count", 0)
+
+        elif ev.kind == "federation_skipped":
+            result["skipped"] = True
+            result["skip_reason"] = ev.payload.get("reason", "")
+
+    result["linked_count"] = len(result["linked_sessions"])
+    return result

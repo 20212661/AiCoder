@@ -709,3 +709,81 @@ def dump_checkpoint_skip_metrics(
         "skipped_duplicate_tool_calls": len(skip_events),
         "by_tool": by_tool,
     }
+
+
+def dump_federation_context(
+    task_thread_id: str,
+    root: str = "",
+    policy: Any | None = None,
+) -> dict[str, Any]:
+    """Dump federation restore context for diagnostics.
+
+    Explains: which sessions were used, what content was restored,
+    budget consumption, and why sessions were skipped.
+
+    Returns:
+        dict with keys: task_thread_id, sessions_used, sessions_skipped,
+        context_tokens, federation_budget_tokens, goals_count,
+        decisions_count, open_loops_count, files_count, discard_reason
+    """
+    from ..session.federation import FederationPolicy, load_task_thread
+    from ..session.restore_bundle import build_restore_bundle
+    from ..context.packer import trim_federation_context
+
+    if policy is None:
+        policy = FederationPolicy()
+
+    result: dict[str, Any] = {
+        "task_thread_id": task_thread_id,
+        "sessions_used": [],
+        "sessions_skipped": [],
+        "context_tokens": 0,
+        "federation_budget_tokens": policy.federation_tokens,
+        "goals_count": 0,
+        "decisions_count": 0,
+        "open_loops_count": 0,
+        "files_count": 0,
+        "discard_reason": "",
+    }
+
+    if not root or not task_thread_id:
+        return result
+
+    tt = load_task_thread(task_thread_id, root=root)
+    if tt is None:
+        return result
+
+    bundle = build_restore_bundle(task_thread_id, root=root, policy=policy)
+    context_text = trim_federation_context(bundle, max_tokens=policy.federation_tokens)
+
+    result["sessions_used"] = bundle.sessions_used
+    result["sessions_skipped"] = bundle.sessions_skipped
+    result["context_tokens"] = len(context_text) // 4
+    result["goals_count"] = len(bundle.goals)
+    result["decisions_count"] = len(bundle.decisions)
+    result["open_loops_count"] = len(bundle.open_loops)
+    result["files_count"] = len(bundle.critical_files)
+
+    if bundle.sessions_skipped:
+        result["discard_reason"] = (
+            f"Exceeded max_restore_sessions cap ({policy.max_restore_sessions}); "
+            f"skipped {len(bundle.sessions_skipped)} sessions"
+        )
+
+    return result
+
+
+def dump_federation_replay_trace(
+    events: list,
+) -> dict[str, Any]:
+    """Dump federation replay trace from event records.
+
+    Reconstructs the federation audit trail showing session linkage,
+    restore decisions, and skip reasons.
+
+    Returns:
+        dict from replay_federation_trace()
+    """
+    from ..events.replay import replay_federation_trace
+
+    return replay_federation_trace(events)

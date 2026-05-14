@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import { useConfigStore } from "../../stores/configStore.js";
-import { getBackendApi } from "../hooks/useOfficialBackend.js";
+import { getBackendApi } from "../../hooks/useBackend.js";
 
 interface ModelPickerProps {
   visible: boolean;

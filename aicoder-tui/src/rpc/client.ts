@@ -25,7 +25,7 @@ export class RpcClient extends EventEmitter {
   ): Promise<void> {
     this.transport.on("message", (msg) => this.handleMessage(msg));
     this.transport.on("stderr", (data) => this.emit("stderr", data));
-    this.transport.on("close", (code) => this.emit("close", code));
+    this.transport.on("close", (code, intentional) => this.emit("close", code, intentional));
     this.transport.on("error", (err) => this.emit("error", err));
 
     await this.transport.connect(command, args);

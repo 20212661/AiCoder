@@ -8,11 +8,9 @@
   },
   "scripts": {
     "dev": "tsx src/index.tsx",
-    "dev:legacy": "cross-env AICODER_TUI_RUNTIME=legacy tsx src/index.tsx",
     "dev:watch": "tsx watch src/index.tsx",
     "build": "tsup",
     "start": "node bin/aicoder.js",
-    "start:legacy": "cross-env AICODER_TUI_RUNTIME=legacy node bin/aicoder.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

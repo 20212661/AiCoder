@@ -25,6 +25,10 @@ EventKind = Literal[
     "recovery_routed",
     "checkpoint_skip",
     "verification_suppressed",
+    "federation_started",
+    "federation_session_linked",
+    "federation_restored",
+    "federation_skipped",
 ]
 
 

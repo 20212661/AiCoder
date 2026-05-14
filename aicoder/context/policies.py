@@ -29,6 +29,8 @@ class ContextBudget:
     focused_file_tokens: int
     tool_trace_tokens: int
     reserve_tokens: int = 4096
+    federation_tokens: int = 0
+    federation_sessions_cap: int = 5
 
 
 @dataclass(frozen=True)

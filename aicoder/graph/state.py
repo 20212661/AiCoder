@@ -83,3 +83,7 @@ class AgentGraphState(TypedDict, total=False):
     verification_results: list[dict[str, Any]]
     recovery_decisions: list[dict[str, Any]]
     last_recovery_route: dict[str, Any]
+    # v1.7: Session Federation fields (optional — absent when no federation)
+    task_thread_id: str
+    federation_context: str
+    federation_trace: dict[str, Any]

@@ -11,6 +11,8 @@ const projectRoot = resolve(__dirname, "..", "..", "..");
 export class StdioTransport extends EventEmitter {
   private proc: ChildProcess | null = null;
   private buffer = "";
+  /** True when disconnect() was called intentionally — close is expected. */
+  private _intentional = false;
 
   async connect(
     command: string = "python",
@@ -52,9 +54,10 @@ export class StdioTransport extends EventEmitter {
           reject(new Error(`Python process closed unexpectedly with code ${code}`));
         }
         this.proc = null;
-        // Don't emit "close" if we already rejected
+        // Emit close with intentional flag so consumers can distinguish
+        // expected shutdown from unexpected crash.
         if (code !== null) {
-          this.emit("close", code);
+          this.emit("close", code, this._intentional);
         }
       });
 
@@ -103,6 +106,7 @@ export class StdioTransport extends EventEmitter {
 
   async disconnect(): Promise<void> {
     if (this.proc) {
+      this._intentional = true;
       this.proc.kill("SIGTERM");
       this.proc = null;
     }

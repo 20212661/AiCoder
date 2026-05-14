@@ -360,3 +360,54 @@ def _extract_repo_reasons(messages: list[dict], start: int, end: int) -> list[di
                 if len(parts) == 2:
                     reasons.append({"path": parts[0][2:], "reason": parts[1]})
     return reasons[:5]
+
+
+def trace_federation(
+    task_thread_id: str,
+    root: str = "",
+) -> dict[str, Any]:
+    """Produce a federation-specific trace for diagnostics.
+
+    Shows: federation availability, context tokens, session selection,
+    content breakdown, and discard reasons.
+
+    Returns a dict suitable for printing or logging.
+    """
+    from ..session.federation import FederationPolicy
+    from ..session.restore_bundle import build_restore_bundle
+    from ..context.packer import trim_federation_context
+
+    result: dict[str, Any] = {
+        "federation_available": False,
+        "context_tokens": 0,
+        "sessions_used": [],
+        "sessions_skipped": [],
+    }
+
+    if not task_thread_id or not root:
+        return result
+
+    policy = FederationPolicy()
+    bundle = build_restore_bundle(task_thread_id, root=root, policy=policy)
+
+    if not bundle.sessions_used:
+        return result
+
+    context_text = trim_federation_context(bundle, max_tokens=policy.federation_tokens)
+
+    result["federation_available"] = True
+    result["task_thread_id"] = task_thread_id
+    result["context_tokens"] = len(context_text) // 4
+    result["budget_tokens"] = policy.federation_tokens
+    result["sessions_used"] = bundle.sessions_used
+    result["sessions_skipped"] = bundle.sessions_skipped
+    result["goals_count"] = len(bundle.goals)
+    result["decisions_count"] = len(bundle.decisions)
+    result["open_loops_count"] = len(bundle.open_loops)
+    result["files_count"] = len(bundle.critical_files)
+    result["utilization"] = (
+        f"{len(context_text) // 4}/{policy.federation_tokens}"
+        if policy.federation_tokens > 0 else "n/a"
+    )
+
+    return result

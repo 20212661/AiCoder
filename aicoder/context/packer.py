@@ -400,3 +400,91 @@ def build_repo_context(
     """
     from .repo_map import build_repo_context as _build_repo_context
     return _build_repo_context(coder, mode, budget_tokens)
+
+
+def federation_context_messages(bundle: Any) -> list[dict[str, Any]]:
+    """Convert a RestoreBundle into LLM-consumable messages.
+
+    Returns a list of user/assistant message pairs describing the federated
+    context from prior sessions. Empty list if bundle has no content.
+    """
+    if bundle is None:
+        return []
+
+    sections: list[str] = []
+
+    if getattr(bundle, "goals", None):
+        goals_text = "\n".join(f"  - {g}" for g in bundle.goals)
+        sections.append(f"Prior session goals:\n{goals_text}")
+
+    if getattr(bundle, "decisions", None):
+        dec_text = "\n".join(f"  - {d}" for d in bundle.decisions[:10])
+        sections.append(f"Key decisions from prior sessions:\n{dec_text}")
+
+    if getattr(bundle, "open_loops", None):
+        loops_text = "\n".join(f"  - {l}" for l in bundle.open_loops[:5])
+        sections.append(f"Open items to continue:\n{loops_text}")
+
+    if getattr(bundle, "critical_files", None):
+        files_text = ", ".join(bundle.critical_files[:15])
+        sections.append(f"Critical files from prior sessions: {files_text}")
+
+    if getattr(bundle, "constraints", None):
+        con_text = "\n".join(f"  - {c}" for c in bundle.constraints[:5])
+        sections.append(f"Constraints from prior sessions:\n{con_text}")
+
+    if not sections:
+        return []
+
+    content = "\n\n".join(sections)
+    return [dict(role="user", content=f"[Federation Context]\n{content}")]
+
+
+def trim_federation_context(bundle: Any, max_tokens: int) -> str:
+    """Trim a RestoreBundle's text representation to fit within max_tokens.
+
+    Applies layered trimming: drops oldest goals/decisions first, then
+    truncates remaining content to fit the budget.
+    """
+    if bundle is None:
+        return ""
+
+    msgs = federation_context_messages(bundle)
+    if not msgs:
+        return ""
+
+    combined = "\n".join(m.get("content", "") for m in msgs)
+    total_chars = len(combined)
+    budget_chars = max_tokens * 4
+
+    if total_chars <= budget_chars:
+        return combined
+
+    # Progressive trimming: drop items from the bundle
+    import copy
+    trimmed = copy.deepcopy(bundle)
+
+    # Phase 1: Truncate decisions (most voluminous)
+    if len(trimmed.decisions) > 5:
+        trimmed.decisions = trimmed.decisions[-5:]
+
+    # Phase 2: Truncate goals
+    if len(trimmed.goals) > 3:
+        trimmed.goals = trimmed.goals[-3:]
+
+    # Phase 3: Truncate open loops
+    if len(trimmed.open_loops) > 3:
+        trimmed.open_loops = trimmed.open_loops[-3:]
+
+    # Phase 4: Truncate critical files
+    if len(trimmed.critical_files) > 10:
+        trimmed.critical_files = trimmed.critical_files[-10:]
+
+    msgs2 = federation_context_messages(trimmed)
+    combined2 = "\n".join(m.get("content", "") for m in msgs2)
+
+    if len(combined2) <= budget_chars:
+        return combined2
+
+    # Final fallback: hard truncate
+    return combined2[:budget_chars]
