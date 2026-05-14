@@ -149,6 +149,12 @@ def get_parser():
         action="store_true",
         help="以 JSON-RPC 服务模式启动（供外部 TUI 调用）",
     )
+    parser.add_argument(
+        "--runtime",
+        choices=["legacy", "langchain"],
+        default="legacy",
+        help="Agent runtime backend to use (default: legacy)",
+    )
 
     return parser
 
@@ -357,6 +363,9 @@ def main(argv=None):
 
     # 关联审批控制器到 Coder
     coder._approval = ApprovalController(approval_settings)
+
+    # 设置 runtime 后端
+    coder.runtime = args.runtime
 
     # 【启动】RPC 服务模式、CLI 模式
     if args.serve:

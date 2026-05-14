@@ -40,6 +40,7 @@ class Coder:
         self._session_token_in = 0
         self._session_token_out = 0
         self._approval = None  # Set by main.py after loading settings
+        self.runtime = "legacy"  # Overridden by main.py if --runtime langchain
         self._cached_system_messages = None
         self._cached_system_key = None  # (model_name, mode) tuple
         self._init_tool_system()
@@ -289,12 +290,38 @@ class Coder:
         return None
 
     def run(self, with_message: str | None = None) -> str | None:
-        """Sole entry point for user turns — unconditionally delegates to AgentRuntime.
+        """Sole entry point for user turns — delegates to AgentRuntime.
 
-        All execution (CLI and --serve) flows through this method into
-        AgentRuntime + LangGraph.  There is no legacy bypass path.
+        When runtime == "langchain", uses the experimental LangChain agent.
+        Otherwise delegates to the existing AgentRuntime + LangGraph pipeline.
         """
         self.show_announcements()
+
+        # Experimental LangChain runtime bypass
+        if getattr(self, "runtime", "legacy") == "langchain":
+            if not with_message:
+                self.io.tool_warning(
+                    "LangChain runtime requires --message for non-interactive use. "
+                    "Use: aicoder --runtime langchain --message \"your question\". "
+                    "For interactive mode, omit --runtime to use the default legacy runtime."
+                )
+                return None
+            from ..langchain_runtime.agent import run_langchain_agent
+            text = run_langchain_agent(self, with_message)
+            self.io.print_assistant_output(text)
+
+            # Persist conversation turn to session JSON (same pattern as legacy runtime)
+            if self.session_id:
+                self.cur_messages.append(dict(role="user", content=with_message))
+                if not self._first_user_message:
+                    self._first_user_message = with_message
+                self.cur_messages.append(dict(role="assistant", content=text or ""))
+                self.done_messages.extend(self.cur_messages)
+                self.cur_messages = []
+                self._save_session()
+
+            return text
+
         try:
             if with_message:
                 from ..agent_runtime import _create_runtime
